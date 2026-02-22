@@ -3,7 +3,7 @@ import sys
 import asyncio
 import logging
 from pyrogram import Client, filters, idle
-from pyrogram.types import Message
+from pyrogram.types import Message, BotCommand
 from pyrogram.enums import ChatType
 from pyrogram.errors import (
     FloodWait, UserAdminInvalid, PeerIdInvalid, RPCError,
@@ -434,6 +434,19 @@ async def main():
         finally:
             if os.path.exists("restart.txt"):
                 os.remove("restart.txt")
+                
+    # Setup Telegram Bot Menu Commands natively
+    try:
+        await bot.set_bot_commands([
+            BotCommand("start", "Show the welcome message and commands"),
+            BotCommand("login", "Login to the Userbot (Scout) account"),
+            BotCommand("groups", "List your admin groups"),
+            BotCommand("channels", "List your admin channels"),
+            BotCommand("update", "Update bot from git repo & restart"),
+            BotCommand("restart", "Restart the bot process")
+        ])
+    except Exception as e:
+        logger.warning(f"Failed to set bot commands menu: {e}")
     
     logger.info("Checking Userbot Session...")
     try:
