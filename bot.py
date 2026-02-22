@@ -4,7 +4,12 @@ import asyncio
 import logging
 from pyrogram import Client, filters, idle
 from pyrogram.types import Message
-import config
+
+# Configuration (Hardcoded for single-file deployment robustness)
+API_ID = 35486723
+API_HASH = "2eff0189a873bb08473f18ef71005830"
+BOT_TOKEN = "8398637498:AAGUD6ncda30MtZ-e8G0P2kBRkT2pfc3bi4"
+ADMIN_GROUP_ID = -1003552827391
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -13,16 +18,16 @@ logger = logging.getLogger("Bot")
 # Initialize the Bot client
 bot = Client(
     "controller_bot",
-    api_id=config.API_ID,
-    api_hash=config.API_HASH,
-    bot_token=config.BOT_TOKEN
+    api_id=API_ID,
+    api_hash=API_HASH,
+    bot_token=BOT_TOKEN
 )
 
 def auth_filter(_, __, message: Message):
     if not message.chat:
         return False
     # Only allow messages from the specified admin group
-    if config.ADMIN_GROUP_ID and message.chat.id == config.ADMIN_GROUP_ID:
+    if ADMIN_GROUP_ID and message.chat.id == ADMIN_GROUP_ID:
         return True
     return False
 
