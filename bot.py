@@ -8,37 +8,47 @@ from pyrogram.types import Message
 import config
 
 # Setup logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger("Bot")
 
+GROUP_ID = -1003552827391
+
+class BotClient(Client):
+    async def start(self):
+        await super().start()
+        logger.info("Bot started successfully.")
+        # Send startup message only if restarted via /update command
+        if os.environ.get("BOT_JUST_UPDATED") == "1":
+            try:
+                await self.send_message(GROUP_ID, "Bot is running...")
+            except Exception as e:
+                logger.error(f"Failed to send startup message: {e}")
+            os.environ.pop("BOT_JUST_UPDATED", None)
+
 # Initialize the Bot client
-bot = Client(
+app = BotClient(
     "controller_bot",
     api_id=config.API_ID,
     api_hash=config.API_HASH,
     bot_token=config.BOT_TOKEN
 )
 
-@bot.on_message(filters.command("start"))
+@app.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
-    # Dhoondte hain user ka naam aur ID chahe wo normal user ho ya anonymous admin
-    if message.from_user:
-        name = message.from_user.first_name
-        uid = message.from_user.id
-    elif message.sender_chat:
-        name = message.sender_chat.title
-        uid = message.sender_chat.id
-    else:
-        name = "User"
-        uid = message.chat.id
-        
-    # User ko normal text message reply karo
-    await message.reply(f"Hi {name}\n{uid}")
+    """
+    Working /start command handler.
+    Replies: Bot is working successfully ✅
+    """
+    await message.reply("Bot is working successfully ✅")
 
-GROUP_ID = -1003552827391
-
-@bot.on_message(filters.command("update") & filters.chat(GROUP_ID))
+@app.on_message(filters.command("update") & filters.chat(GROUP_ID))
 async def update_command(client: Client, message: Message):
+    """
+    /update command for admins. Pulls latest changes from git and restarts.
+    """
     is_admin = False
     
     if message.from_user:
@@ -67,17 +77,8 @@ async def update_command(client: Client, message: Message):
         return
         
     # Restart the bot
+    os.environ["BOT_JUST_UPDATED"] = "1"
     os.execl(sys.executable, sys.executable, *sys.argv)
 
-async def main():
-    try:
-        await bot.send_message(GROUP_ID, "Bot is running...")
-    except Exception as e:
-        logger.error(f"Failed to send startup msg: {e}")
-    
-    from pyrogram import idle
-    await idle()
-
 if __name__ == "__main__":
-    logger.info("Bot is starting... (All previous complex logic removed)")
-    bot.run(main())
+    app.run()
