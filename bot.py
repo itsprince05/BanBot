@@ -1,15 +1,7 @@
-import os
-import sys
-import asyncio
 import logging
-from pyrogram import Client, filters, idle
+from pyrogram import Client, filters
 from pyrogram.types import Message
-
-# Configuration (Hardcoded for single-file deployment robustness)
-API_ID = 35486723
-API_HASH = "2eff0189a873bb08473f18ef71005830"
-BOT_TOKEN = "8398637498:AAGUD6ncda30MtZ-e8G0P2kBRkT2pfc3bi4"
-ADMIN_GROUP_ID = -1003552827391
+import config
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -18,20 +10,10 @@ logger = logging.getLogger("Bot")
 # Initialize the Bot client
 bot = Client(
     "controller_bot",
-    api_id=API_ID,
-    api_hash=API_HASH,
-    bot_token=BOT_TOKEN
+    api_id=config.API_ID,
+    api_hash=config.API_HASH,
+    bot_token=config.BOT_TOKEN
 )
-
-def auth_filter(_, __, message: Message):
-    if not message.chat:
-        return False
-    # Only allow messages from the specified admin group
-    if ADMIN_GROUP_ID and message.chat.id == ADMIN_GROUP_ID:
-        return True
-    return False
-
-auth = filters.create(auth_filter)
 
 @bot.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
@@ -49,66 +31,6 @@ async def start_command(client: Client, message: Message):
     # User ko normal text message reply karo
     await message.reply(f"Hi {name}\n{uid}")
 
-@bot.on_message(filters.command("update") & auth)
-async def update_command(client: Client, message: Message):
-    m = await message.reply("Pulling updates from repository...")
-    try:
-        process = await asyncio.create_subprocess_shell(
-            "git pull",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await process.communicate()
-        output = (stdout.decode() + stderr.decode()).strip()
-        
-        if "Already up to date." in output:
-            return await m.edit("Bot is already up to date.")
-            
-        await m.edit(f"Update pulled successfully. Restarting bot...\n\n`{output[:1000]}`")
-        
-        with open("restart.txt", "w") as f:
-            f.write(f"{message.chat.id}")
-            
-        await bot.stop()
-        os.execl(sys.executable, sys.executable, *sys.argv)
-    except Exception as e:
-        await m.edit(f"Failed to update: {e}")
-
-@bot.on_message(filters.command("restart") & auth)
-async def restart_command(client: Client, message: Message):
-    m = await message.reply("Restarting bot...")
-    try:
-        with open("restart.txt", "w") as f:
-            f.write(f"{message.chat.id}")
-            
-        await bot.stop()
-        os.execl(sys.executable, sys.executable, *sys.argv)
-    except Exception as e:
-        await m.edit(f"Failed to restart: {e}")
-
-async def main():
-    logger.info("Bot is starting...")
-    await bot.start()
-    
-    if os.path.exists("restart.txt"):
-        try:
-            with open("restart.txt", "r") as f:
-                chat_id = f.read().strip()
-            
-            if chat_id:
-                await bot.send_message(int(chat_id), "Bot is running...")
-        except Exception as e:
-            logger.error(f"Failed to send restart message: {e}")
-        finally:
-            if os.path.exists("restart.txt"):
-                os.remove("restart.txt")
-                
-    logger.info("Bot is idle and listening for commands...")
-    await idle()
-    await bot.stop()
-
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        logger.info("Bot stopped silently.")
+    logger.info("Bot is starting... (All previous complex logic removed)")
+    bot.run()
