@@ -39,6 +39,10 @@ login_states = {}
 def auth_filter(_, __, message: Message):
     if not message.chat:
         return False
+        
+    # Temporary log to help us see WHAT group ID the bot is actually seeing vs what we set
+    logger.info(f"Received message in Chat ID: {message.chat.id} | Allowed Group ID: {ADMIN_GROUP_ID}")
+    
     # Only allow messages from the specified admin group
     if ADMIN_GROUP_ID and message.chat.id == ADMIN_GROUP_ID:
         return True
