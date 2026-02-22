@@ -9,16 +9,12 @@ from pyrogram.errors import (
     FloodWait, UserAdminInvalid, PeerIdInvalid, RPCError,
     SessionPasswordNeeded, PhoneCodeInvalid, PhoneCodeExpired
 )
-from dotenv import load_dotenv
+import config
 
-# Load environment variables
-load_dotenv()
-
-API_ID = int(os.getenv("API_ID", "35486723"))
-API_HASH = os.getenv("API_HASH", "2eff0189a873bb08473f18ef71005830")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8398637498:AAGUD6ncda30MtZ-e8G0P2kBRkT2pfc3bi4")
-ADMIN_GROUP_ID_STR = os.getenv("ADMIN_GROUP_ID", "0")
-ADMIN_GROUP_ID = int(ADMIN_GROUP_ID_STR) if ADMIN_GROUP_ID_STR else 0
+API_ID = config.API_ID
+API_HASH = config.API_HASH
+BOT_TOKEN = config.BOT_TOKEN
+ADMIN_GROUP_ID = config.ADMIN_GROUP_ID
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("BanBot")
