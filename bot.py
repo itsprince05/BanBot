@@ -36,6 +36,13 @@ bot = Client(
 user_states = {}
 login_states = {}
 
+def get_user_id(message: Message) -> int:
+    if message.from_user:
+        return message.from_user.id
+    if message.sender_chat:
+        return message.sender_chat.id
+    return 0
+
 def auth_filter(_, __, message: Message):
     if not message.chat:
         return False
@@ -53,9 +60,13 @@ auth = filters.create(auth_filter)
 
 # ================= LOGIN FLOW ================= #
 
-@bot.on_message(filters.command("start") & filters.private)
-async def private_start(client: Client, message: Message):
-    await message.reply("Hello")
+@bot.on_message(filters.command("id"))
+async def id_command(client: Client, message: Message):
+    await message.reply(f"Chat ID: `{message.chat.id}`")
+
+@bot.on_message(filters.command("start") & ~auth)
+async def public_start(client: Client, message: Message):
+    await message.reply(f"Hello! I am alive.\n\nYour Current Chat ID is: `{message.chat.id}`\nAdd this to your config.py if you want to control me here.")
 
 @bot.on_message(filters.command("start") & auth)
 async def start_command(client: Client, message: Message):
@@ -71,8 +82,10 @@ async def start_command(client: Client, message: Message):
 
 @bot.on_message(filters.command("login") & auth)
 async def login_command(client: Client, message: Message):
-    admin_id = message.from_user.id
-    
+    admin_id = get_user_id(message)
+    if not admin_id:
+        return await message.reply("Unknown identity. Please send as a normal user.")
+        
     # Check if userbot is already logged in conceptually
     try:
         if not userbot.is_connected:
@@ -92,7 +105,7 @@ async def login_command(client: Client, message: Message):
 
 @bot.on_message(filters.text & auth, group=1)
 async def handle_login_steps(client: Client, message: Message):
-    admin_id = message.from_user.id
+    admin_id = get_user_id(message)
     if admin_id not in login_states:
         return message.continue_propagation()
         
@@ -266,7 +279,11 @@ async def ban_target_selection(client: Client, message: Message):
     except Exception as e:
         return await message.reply(f"Failed to fetch chat details. Error: {e}")
         
-    user_states[message.from_user.id] = {
+    admin_id = get_user_id(message)
+    if not admin_id:
+        return await message.reply("Unknown identity. Cannot set target.")
+        
+    user_states[admin_id] = {
         "target_chat_id": chat_id,
         "chat_name": chat_name
     }
@@ -279,7 +296,7 @@ async def ban_target_selection(client: Client, message: Message):
 
 @bot.on_message(filters.reply & auth)
 async def handle_ban_execution(client: Client, message: Message):
-    admin_id = message.from_user.id
+    admin_id = get_user_id(message)
     
     if admin_id not in user_states:
         return
