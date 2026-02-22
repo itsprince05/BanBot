@@ -53,6 +53,10 @@ auth = filters.create(auth_filter)
 
 # ================= LOGIN FLOW ================= #
 
+@bot.on_message(filters.command("start") & filters.private)
+async def private_start(client: Client, message: Message):
+    await message.reply("Hello")
+
 @bot.on_message(filters.command("start") & auth)
 async def start_command(client: Client, message: Message):
     await message.reply(
