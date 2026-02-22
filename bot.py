@@ -4,7 +4,7 @@ import asyncio
 import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from pyrogram.enums import ChatMemberStatus
+from pyrogram.enums import ChatMemberStatus, ChatType
 import config
 
 # Setup logging
@@ -24,17 +24,29 @@ async def start_command(client: Client, message: Message):
     # Dhoondte hain user ka naam aur ID chahe wo normal user ho ya anonymous admin
     if message.from_user:
         name = message.from_user.first_name
-        uid = message.from_user.id
     elif message.sender_chat:
         name = message.sender_chat.title
-        uid = message.sender_chat.id
     else:
         name = "User"
-        uid = message.chat.id
         
     # User ko normal text message reply karo
-    await message.reply(f"Hi {name}\n{uid}")
+    await message.reply(f"Hi {name}")
 
+@bot.on_message(filters.command("id"))
+async def id_command(client: Client, message: Message):
+    # Try fetching individual User ID (Handle anonymous group admins too)
+    user_id = None
+    if message.from_user:
+        user_id = message.from_user.id
+    elif message.sender_chat:
+        user_id = message.sender_chat.id
+        
+    if user_id:
+        await message.reply(f"Your ID:\n`{user_id}`")
+        
+    # Sirf groups mein Chat ID bhi bhejne ka logic
+    if message.chat and message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
+        await message.reply(f"Group Chat ID:\n`{message.chat.id}`")
 @bot.on_message(filters.command("update") & filters.chat(config.ADMIN_GROUP_ID))
 async def update_command(client: Client, message: Message):
     # Check if the user is an admin in the group
