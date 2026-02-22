@@ -2,7 +2,7 @@ import os
 import sys
 import asyncio
 import logging
-from pyrogram import Client, filters
+from pyrogram import Client, filters, idle
 from pyrogram.types import Message
 from pyrogram.enums import ChatMemberStatus, ChatType
 import config
@@ -49,10 +49,15 @@ async def id_command(client: Client, message: Message):
         await message.reply(f"Group Chat ID:\n`{message.chat.id}`")
 @bot.on_message(filters.command("update") & filters.chat(config.ADMIN_GROUP_ID))
 async def update_command(client: Client, message: Message):
-    # Check if the user is an admin in the group
-    member = await client.get_chat_member(message.chat.id, message.from_user.id)
-    if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-        return await message.reply("You must be an admin to use this command.")
+    user_id = message.from_user.id if message.from_user else message.sender_chat.id
+    
+    # Bypass admin check if message is from the linked channel / anonymous group admin
+    if message.sender_chat:
+        pass
+    else:
+        member = await client.get_chat_member(message.chat.id, user_id)
+        if member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+            return await message.reply("You must be an admin to use this command.")
 
     m = await message.reply("Pulling updates from git...")
     try:
@@ -101,11 +106,7 @@ async def main():
                 os.remove("restart.txt")
                 
     logger.info("Bot is idle and ready.")
-    await pyrogram.idle() if 'pyrogram' in globals() else await idle_fallback()
-
-async def idle_fallback():
-    import pyrogram
-    await pyrogram.idle()
+    await idle()
 
 if __name__ == "__main__":
     try:
