@@ -241,7 +241,7 @@ async def fetch_members_command(client: Client, message: Message):
 async def stop_command(client: Client, message: Message):
     global halt_ban
     halt_ban = True
-    await client.send_message(message.chat.id, "Attempting to halt any active /ban processes... Please wait a few seconds...")
+    await client.send_message(message.chat.id, "Ban Process Stopped")
 
 @app.on_message(filters.command("ban") & filters.chat(GROUP_ID))
 async def ban_command(client: Client, message: Message):
@@ -305,7 +305,7 @@ async def ban_command(client: Client, message: Message):
     total_processed = 0
     
     seen_uids = set()
-    global_start_t = time.time()
+    global_start_t = None
     last_progress_t = time.time()
     
     try:
@@ -348,6 +348,9 @@ async def ban_command(client: Client, message: Message):
                 if halt_ban:
                     break
                     
+                if global_start_t is None:
+                    global_start_t = time.time()
+                    
                 start_t = time.time()
                 try:
                     res = await ban_via_api(chat_id, uid)
@@ -388,7 +391,7 @@ async def ban_command(client: Client, message: Message):
         if user_client.is_connected:
             await user_client.disconnect()
             
-    time_taken = int(time.time() - global_start_t)
+    time_taken = int(time.time() - (global_start_t if global_start_t is not None else time.time()))
     if time_taken < 60:
         time_str = f"{time_taken} seconds"
     elif time_taken < 3600:
