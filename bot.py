@@ -5,6 +5,7 @@ import logging
 import asyncio
 import json
 import urllib.request
+import time
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus, ChatType
 from pyrogram.types import Message
@@ -331,6 +332,7 @@ async def ban_command(client: Client, message: Message):
         if halt_ban:
             break
             
+        start_t = time.time()
         try:
             res = await ban_via_api(chat_id, uid)
             if res.get("ok"):
@@ -344,36 +346,41 @@ async def ban_command(client: Client, message: Message):
             last_error = str(e)
             logger.error(f"Local fail for {uid}: {e}")
             
+        elapsed = time.time() - start_t
+            
         # Update progress and apply timing delays exactly as requested:
-        # Since it processes 2 users per second (0.5s delay), every 20 users processed == 10 seconds of processing
-        if i % 20 == 0:
+        # We aim for 0.5s per ban iteration. We subtract elapsed HTTP time to keep exactly to 2 users/second.
+        if i % 10 == 0 or i == total_uids:
             try:
-                prog_text = (f"Progress Update (10s processed):\n"
-                             f"Users Checked: {i} / {total_uids}\n"
-                             f"Banned: {banned_count}\n"
-                             f"Failed: {fail_count}\n")
-                if fail_count > 0:
-                    prog_text += f"Last Error: `{last_error}`\n"
-                prog_text += f"\n_Taking a 5s cooling pause to avoid rate limits..._"
+                prog_text = (f"Ban Process Running\n\n"
+                             f"Total {total_uids}\n"
+                             f"Banned {banned_count}\n"
+                             f"Remaining {total_uids - i}\n"
+                             f"Failed {fail_count}\n\n")
+                             
+                if i % 20 == 0 and i != total_uids and not halt_ban:
+                    prog_text += "5 seconds break\n\n"
+                    
+                prog_text += "Click /stop to stop runnning process"
                 await status_msg.edit_text(prog_text)
             except Exception:
                 pass
-            if i != total_uids and not halt_ban:
-                await asyncio.sleep(5)
+                
+        if i % 20 == 0 and i != total_uids and not halt_ban:
+            # Add 5 seconds plus any remaining fraction of the 0.5s window
+            await asyncio.sleep(max(0, 5.0 + 0.5 - elapsed))
         else:
             if i != total_uids and not halt_ban:
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(max(0, 0.5 - elapsed))
             
     if halt_ban:
-        final_text = f"Process stopped prematurely by Admin!\n\n"
+        final_text = "Ban Process Stopped\n\n"
     else:
-        final_text = f"Ban process completed for {chat_id}!\n\n"
+        final_text = "Ban Process Completed\n\n"
         
-    final_text += (f"Total Targeted: {total_uids}\n"
-                   f"Successfully Banned: {banned_count}\n"
-                   f"Failed: {fail_count}")
-    if fail_count > 0:
-        final_text += f"\n\nLast Error encountered: `{last_error}`"
+    final_text += (f"Total {total_uids}\n"
+                   f"Banned {banned_count}\n"
+                   f"Failed {fail_count}")
         
     await status_msg.edit_text(final_text)
 
