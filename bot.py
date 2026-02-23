@@ -40,9 +40,16 @@ app = BotClient(
 async def start_command(client: Client, message: Message):
     """
     Working /start command handler.
-    Replies: Bot is working successfully ✅
+    Replies: Hi {username}
     """
-    await message.reply("Bot is working successfully ✅")
+    if message.from_user:
+        name = message.from_user.username if message.from_user.username else message.from_user.first_name
+    elif message.sender_chat:
+        name = message.sender_chat.username if message.sender_chat.username else message.sender_chat.title
+    else:
+        name = "User"
+        
+    await message.reply(f"Hi {name}")
 
 @app.on_message(filters.command("update") & filters.chat(GROUP_ID))
 async def update_command(client: Client, message: Message):
