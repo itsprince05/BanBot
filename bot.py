@@ -276,6 +276,8 @@ async def ban_command(client: Client, message: Message):
             if user:
                 uids.append(user.id)
                 
+        user_raw_peer = await user_client.resolve_peer(chat_id)
+                
     except Exception as e:
         await status_msg.edit_text(f"Error fetching members before ban: {e}")
         if user_client.is_connected:
@@ -294,9 +296,12 @@ async def ban_command(client: Client, message: Message):
     await status_msg.edit_text(f"Fetched {total_uids} members. Starting ban process...")
     
     try:
-        peer_channel = await client.resolve_peer(chat_id)
+        if hasattr(user_raw_peer, 'access_hash'):
+            peer_channel = types.InputChannel(channel_id=user_raw_peer.channel_id, access_hash=user_raw_peer.access_hash)
+        else:
+            peer_channel = None
     except Exception as e:
-        await status_msg.edit_text(f"Bot error: Failed to resolve channel peer for banning. Make sure Bot is admin: {e}")
+        await status_msg.edit_text(f"Bot error: Failed to parse channel peer. {e}")
         return
 
     banned_count = 0
@@ -304,24 +309,28 @@ async def ban_command(client: Client, message: Message):
     
     for i, uid in enumerate(uids, start=1):
         try:
-            # Using raw API to bypass Pyrogram's PeerIdInvalid limitations for un-cached users!
-            await client.invoke(
-                functions.channels.EditBanned(
-                    channel=peer_channel,
-                    participant=types.InputPeerUser(user_id=uid, access_hash=0),
-                    banned_rights=types.ChatBannedRights(
-                        until_date=0,
-                        view_messages=True,
-                        send_messages=True,
-                        send_media=True,
-                        send_stickers=True,
-                        send_gifs=True,
-                        send_games=True,
-                        send_inline=True,
-                        embed_links=True
+            if peer_channel:
+                # Using raw API to bypass Pyrogram's PeerIdInvalid limitations for un-cached users!
+                await client.invoke(
+                    functions.channels.EditBanned(
+                        channel=peer_channel,
+                        participant=types.InputPeerUser(user_id=uid, access_hash=0),
+                        banned_rights=types.ChatBannedRights(
+                            until_date=0,
+                            view_messages=True,
+                            send_messages=True,
+                            send_media=True,
+                            send_stickers=True,
+                            send_gifs=True,
+                            send_games=True,
+                            send_inline=True,
+                            embed_links=True
+                        )
                     )
                 )
-            )
+            else:
+                # Fallback for basic groups
+                await client.ban_chat_member(chat_id, uid)
             banned_count += 1
         except Exception as e:
             fail_count += 1
