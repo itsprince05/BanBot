@@ -161,6 +161,47 @@ async def check_command(client: Client, message: Message):
     else:
         await status_msg.edit_text("No groups or channels found where both you and @Ban_Karne_Wala_Bot are admins with ban rights.")
 
+@app.on_message(filters.regex(r"^/(-\d+)(?:\s+(\d+))?$") & filters.chat(GROUP_ID))
+async def fetch_members_command(client: Client, message: Message):
+    """
+    Fetches 'n' amount of UIDs from a given /<id> group or channel using the user session.
+    """
+    match = message.matches[0]
+    chat_id = int(match.group(1))
+    limit = int(match.group(2)) if match.group(2) else 100
+    
+    user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
+    status_msg = await message.reply(f"Fetching up to {limit} members from {chat_id}...")
+    
+    try:
+        await user_client.connect()
+        me = await user_client.get_me()
+        if not me:
+            raise Exception("Session expired or not logged in.")
+            
+        uids = []
+        async for member in user_client.get_chat_members(chat_id, limit=limit):
+            user = member.user
+            if user:
+                uids.append(str(user.id))
+                
+        if uids:
+            text = "\n".join(uids)
+            with open("members.txt", "w") as f:
+                f.write(text)
+            await message.reply_document("members.txt", caption=f"Fetched {len(uids)} UIDs from `{chat_id}`")
+            os.remove("members.txt")
+            await status_msg.delete()
+        else:
+            await status_msg.edit_text("No members found or couldn't fetch.")
+            
+    except Exception as e:
+        await status_msg.edit_text(f"Error fetching members: {e}")
+        
+    finally:
+        if user_client.is_connected:
+            await user_client.disconnect()
+
 @app.on_message(filters.command("login") & filters.chat(GROUP_ID))
 async def login_command(client: Client, message: Message):
     """
