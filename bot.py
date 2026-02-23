@@ -107,7 +107,7 @@ async def check_command(client: Client, message: Message):
     """
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
     
-    status_msg = await message.reply("Checking all groups and channels... This may take a minute.")
+    status_msg = await message.reply("Checking all groups and channels...\nThis may take a minute...")
     result_list = []
     
     try:
@@ -117,6 +117,9 @@ async def check_command(client: Client, message: Message):
             raise Exception("Session expired or not logged in. Send /login first.")
             
         async for dialog in user_client.get_dialogs():
+            if dialog.chat.id == GROUP_ID:
+                continue
+                
             if dialog.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
                 chat = dialog.chat
                 try:
@@ -127,11 +130,11 @@ async def check_command(client: Client, message: Message):
                             bot_member = await user_client.get_chat_member(chat.id, "Ban_Karne_Wala_Bot")
                             if bot_member.status == ChatMemberStatus.ADMINISTRATOR:
                                 if bot_member.privileges and bot_member.privileges.can_restrict_members:
-                                    # Output format: /<id> <count> <name>
+                                    # Output format: `/<id>` <count> <name>
                                     # If members_count is not readily available, default to 0
                                     member_count = chat.members_count or 0
                                     title = chat.title or "Unknown"
-                                    result_list.append(f"/{chat.id} {member_count} {title}")
+                                    result_list.append(f"`/{chat.id}` {member_count} {title}")
                         except Exception:
                             # Bot might not be in the group, or missing privileges info, skip it
                             pass
@@ -148,7 +151,7 @@ async def check_command(client: Client, message: Message):
         await user_client.disconnect()
         
     if result_list:
-        text = "\n".join(result_list)
+        text = "\n\n".join(result_list)
         if len(text) > 4000:
             for i in range(0, len(text), 4000):
                 await message.reply(text[i:i+4000])
