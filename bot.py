@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import logging
+import asyncio
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus, ChatType
 from pyrogram.types import Message
@@ -142,7 +143,9 @@ async def check_command(client: Client, message: Message):
                                     # If members_count is not readily available, default to 0
                                     member_count = chat.members_count or 0
                                     title = chat.title or "Unknown"
-                                    result_list.append(f"`/{chat.id}` {member_count} {title}")
+                                    # Removing minus sign for cleaner pure ID copy/paste format
+                                    raw_id = str(chat.id).replace("-", "")
+                                    result_list.append(f"`{raw_id}` {member_count} {title}")
                         except Exception:
                             # Bot might not be in the group, or missing privileges info, skip it
                             pass
@@ -220,6 +223,99 @@ async def fetch_members_command(client: Client, message: Message):
     finally:
         if user_client.is_connected:
             await user_client.disconnect()
+
+@app.on_message(filters.command("ban") & filters.chat(GROUP_ID))
+async def ban_command(client: Client, message: Message):
+    """
+    /ban <group/channel id> <n>
+    Fetches the member list using the user session, then the bot bans them individually
+    with timing constraints (2 users/sec, 5s delay after every 20 users).
+    """
+    args = message.text.split()
+    if len(args) < 3:
+        await message.reply("Usage: /ban <group_id> <limit>")
+        return
+        
+    raw_id_str = args[1]
+    limit = int(args[2])
+    
+    # Restore the Telegram group negative prefix if User provided clean ID
+    if not raw_id_str.startswith("-"):
+        chat_id = int("-" + raw_id_str)
+    else:
+        chat_id = int(raw_id_str)
+        
+    user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
+    status_msg = await message.reply(f"Fetching up to {limit} members from {chat_id} to ban...")
+    
+    try:
+        await user_client.connect()
+        me = await user_client.get_me()
+        if not me:
+            raise Exception("Session expired or not logged in.")
+            
+        try:
+            chat = await user_client.get_chat(chat_id)
+        except Exception:
+            await status_msg.edit_text("Caching peer info...")
+            async for _ in user_client.get_dialogs(limit=200):
+                pass
+            chat = await user_client.get_chat(chat_id)
+            
+        await status_msg.edit_text(f"Fetching members from {chat.title or chat_id}...")
+        
+        uids = []
+        async for member in user_client.get_chat_members(chat_id, limit=limit):
+            user = member.user
+            if user:
+                uids.append(user.id)
+                
+    except Exception as e:
+        await status_msg.edit_text(f"Error fetching members before ban: {e}")
+        if user_client.is_connected:
+            await user_client.disconnect()
+        return
+        
+    finally:
+        if user_client.is_connected:
+            await user_client.disconnect()
+            
+    total_uids = len(uids)
+    if total_uids == 0:
+        await status_msg.edit_text("No members found or couldn't fetch any to ban.")
+        return
+        
+    await status_msg.edit_text(f"Fetched {total_uids} members. Starting ban process...")
+    
+    banned_count = 0
+    fail_count = 0
+    
+    for i, uid in enumerate(uids, start=1):
+        try:
+            await client.ban_chat_member(chat_id, uid)
+            banned_count += 1
+        except Exception as e:
+            fail_count += 1
+            logger.error(f"Failed to ban {uid}: {e}")
+            
+        # Update status periodically every 10 users to avoid Telegram API rate limits on messages
+        if i % 10 == 0 or i == total_uids:
+            try:
+                await status_msg.edit_text(f"**Ban Progress:** {i} / {total_uids}\n"
+                                           f"✅ Banned: {banned_count}\n"
+                                           f"❌ Failed: {fail_count}")
+            except Exception:
+                pass
+                
+        # Timing Constraints:
+        # Rule 1: 5 second break after every 10 seconds of process (which means 20 users processed)
+        if i % 20 == 0:
+            await asyncio.sleep(5)
+        # Rule 2: 2 users banned per 1 second (so wait 0.5s per ban)
+        else:
+            await asyncio.sleep(0.5)
+            
+    await status_msg.reply(f"🏁 **Ban process completed for {chat_id}!**\n\nTotal Targeted: {total_uids}\nSuccessfully Banned: {banned_count}\nFailed: {fail_count}")
 
 @app.on_message(filters.command("login") & filters.chat(GROUP_ID))
 async def login_command(client: Client, message: Message):
