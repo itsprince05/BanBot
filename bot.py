@@ -3,7 +3,7 @@ import sys
 import subprocess
 import logging
 from pyrogram import Client, filters
-from pyrogram.enums import ChatMemberStatus
+from pyrogram.enums import ChatMemberStatus, ChatType
 from pyrogram.types import Message
 from pyrogram.errors import SessionPasswordNeeded
 import config
@@ -97,7 +97,66 @@ async def update_command(client: Client, message: Message):
     os.environ["BOT_JUST_UPDATED"] = "1"
     os.environ["BOT_UPDATE_CHAT_ID"] = str(msg.chat.id)
     os.environ["BOT_UPDATE_MSG_ID"] = str(msg.id)
-    os.execl(sys.executable, sys.executable, *sys.argv)
+    os.execve(sys.executable, [sys.executable] + sys.argv, os.environ)
+
+@app.on_message(filters.command("check") & filters.chat(GROUP_ID))
+async def check_command(client: Client, message: Message):
+    """
+    /check command. Scans dialogs of the logged-in user session instance.
+    Lists groups/channels where user is admin AND @Ban_Karne_Wala_Bot is an admin with ban rights.
+    """
+    user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
+    
+    status_msg = await message.reply("Checking all groups and channels... This may take a minute.")
+    result_list = []
+    
+    try:
+        await user_client.connect()
+        me = await user_client.get_me()
+        if not me:
+            raise Exception("Session expired or not logged in. Send /login first.")
+            
+        async for dialog in user_client.get_dialogs():
+            if dialog.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
+                chat = dialog.chat
+                try:
+                    user_member = await user_client.get_chat_member(chat.id, me.id)
+                    if user_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                        # Now check if bot is admin and has ban rights
+                        try:
+                            bot_member = await user_client.get_chat_member(chat.id, "Ban_Karne_Wala_Bot")
+                            if bot_member.status == ChatMemberStatus.ADMINISTRATOR:
+                                if bot_member.privileges and bot_member.privileges.can_restrict_members:
+                                    # Output format: /<id> <count> <name>
+                                    # If members_count is not readily available, default to 0
+                                    member_count = chat.members_count or 0
+                                    title = chat.title or "Unknown"
+                                    result_list.append(f"/{chat.id} {member_count} {title}")
+                        except Exception:
+                            # Bot might not be in the group, or missing privileges info, skip it
+                            pass
+                except Exception:
+                    # User is not admin or missing info, skip
+                    pass
+    except Exception as e:
+        await status_msg.edit_text(f"Error while checking: {e}")
+        if user_client.is_connected:
+            await user_client.disconnect()
+        return
+        
+    if user_client.is_connected:
+        await user_client.disconnect()
+        
+    if result_list:
+        text = "\n".join(result_list)
+        if len(text) > 4000:
+            for i in range(0, len(text), 4000):
+                await message.reply(text[i:i+4000])
+            await status_msg.delete()
+        else:
+            await status_msg.edit_text(text)
+    else:
+        await status_msg.edit_text("No groups or channels found where both you and @Ban_Karne_Wala_Bot are admins with ban rights.")
 
 @app.on_message(filters.command("login") & filters.chat(GROUP_ID))
 async def login_command(client: Client, message: Message):
