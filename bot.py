@@ -252,12 +252,21 @@ async def ban_command(client: Client, message: Message):
     """
     args = message.text.split()
     if len(args) < 3:
-        await client.send_message(message.chat.id, "Usage: /ban <group_id> <limit>")
+        await client.send_message(message.chat.id, "Usage: /ban <group_id> <limit or all>")
         return
         
     raw_id_str = args[1]
-    limit = int(args[2])
+    limit_str = args[2].lower()
     
+    if limit_str == "all":
+        target_limit = float('inf')
+    else:
+        try:
+            target_limit = int(limit_str)
+        except Exception:
+            await client.send_message(message.chat.id, "Limit must be a number or 'all'.")
+            return
+            
     # Restore the Telegram group negative prefix if User provided clean ID
     if not raw_id_str.startswith("-"):
         chat_id = int("-" + raw_id_str)
@@ -265,10 +274,39 @@ async def ban_command(client: Client, message: Message):
         chat_id = int(raw_id_str)
         
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
-    status_msg = await client.send_message(message.chat.id, f"Fetching up to {limit} members from {chat_id} to ban...")
+    status_msg = await client.send_message(message.chat.id, f"Initializing ban process for {chat_id}...")
     
     global halt_ban
     halt_ban = False
+    
+    conn = http.client.HTTPSConnection("api.telegram.org")
+    api_headers = {"Content-Type": "application/json", "Connection": "keep-alive"}
+    
+    async def ban_via_api(target_chat, target_user):
+        data = json.dumps({"chat_id": target_chat, "user_id": target_user}).encode("utf-8")
+        def do_request():
+            try:
+                conn.request("POST", f"/bot{config.BOT_TOKEN}/banChatMember", body=data, headers=api_headers)
+                response = conn.getresponse()
+                return json.loads(response.read().decode())
+            except Exception:
+                try:
+                    conn.close()
+                    conn.connect()
+                    conn.request("POST", f"/bot{config.BOT_TOKEN}/banChatMember", body=data, headers=api_headers)
+                    response = conn.getresponse()
+                    return json.loads(response.read().decode())
+                except Exception as e2:
+                    return {"ok": False, "description": str(e2)}
+        return await asyncio.to_thread(do_request)
+        
+    banned_count = 0
+    fail_count = 0
+    total_processed = 0
+    
+    seen_uids = set()
+    global_start_t = time.time()
+    last_progress_t = time.time()
     
     try:
         await user_client.connect()
@@ -284,120 +322,72 @@ async def ban_command(client: Client, message: Message):
                 pass
             chat = await user_client.get_chat(chat_id)
             
-        await status_msg.edit_text(f"Fetching members from {chat.title or chat_id}...")
+        await status_msg.edit_text(f"Starting chunked ban loops for {chat.title or chat_id}...")
         
-        uids = []
-        async for member in user_client.get_chat_members(chat_id, limit=limit):
-            user = member.user
-            if user and member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-                uids.append(user.id)
+        while total_processed < target_limit and not halt_ban:
+            fetch_amount = min(100, target_limit - total_processed) if target_limit != float('inf') else 100
+            
+            uids = []
+            try:
+                # Always fetch and filter exactly 'fetch_amount' fresh non-admin users
+                async for member in user_client.get_chat_members(chat_id):
+                    if member.user and member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                        if member.user.id not in seen_uids:
+                            uids.append(member.user.id)
+                            seen_uids.add(member.user.id)
+                            if len(uids) >= fetch_amount:
+                                break
+            except Exception as e:
+                logger.error(f"Error fetching chunk: {e}")
                 
-        user_raw_peer = await user_client.resolve_peer(chat_id)
+            if not uids:
+                # No more unbanned regular members exist / list completely exhausted
+                break
                 
+            for uid in uids:
+                if halt_ban:
+                    break
+                    
+                start_t = time.time()
+                try:
+                    res = await ban_via_api(chat_id, uid)
+                    if res.get("ok"):
+                        banned_count += 1
+                    else:
+                        fail_count += 1
+                except Exception:
+                    fail_count += 1
+                    
+                total_processed += 1
+                elapsed = time.time() - start_t
+                
+                # Update progress every exact 5 seconds (Time based instead of loop based)
+                current_t = time.time()
+                if current_t - last_progress_t >= 5.0 or total_processed == target_limit:
+                    try:
+                        total_str = "All" if target_limit == float('inf') else str(target_limit)
+                        rem_str = "Calculating..." if target_limit == float('inf') else str(target_limit - total_processed)
+                        prog_text = (f"Ban Process Running\n\n"
+                                     f"Total {total_str}\n"
+                                     f"Banned {banned_count}\n"
+                                     f"Remaining {rem_str}\n"
+                                     f"Failed {fail_count}\n\n"
+                                     f"Click /stop to stop runnning process...")
+                        await status_msg.edit_text(prog_text)
+                        last_progress_t = current_t
+                    except Exception:
+                        pass
+                        
+                # Preserve 2 bans per second strict rate limit, without dropping to any 5 second break bounds
+                if not halt_ban:
+                    await asyncio.sleep(max(0, 0.5 - elapsed))
+                    
     except Exception as e:
-        await status_msg.edit_text(f"Error fetching members before ban: {e}")
-        if user_client.is_connected:
-            await user_client.disconnect()
-        return
-        
+        await status_msg.edit_text(f"Error during ban loop process: {e}")
     finally:
         if user_client.is_connected:
             await user_client.disconnect()
             
-    total_uids = len(uids)
-    if total_uids == 0:
-        await status_msg.edit_text("No members found or couldn't fetch any to ban...")
-        return
-        
-    await status_msg.edit_text(f"Fetched {total_uids} members...\nStarting ban process via HTTP API...")
-    
-    conn = http.client.HTTPSConnection("api.telegram.org")
-    api_headers = {"Content-Type": "application/json", "Connection": "keep-alive"}
-    
-    async def ban_via_api(target_chat, target_user):
-        data = json.dumps({"chat_id": target_chat, "user_id": target_user}).encode("utf-8")
-        
-        def do_request():
-            try:
-                conn.request("POST", f"/bot{config.BOT_TOKEN}/banChatMember", body=data, headers=api_headers)
-                response = conn.getresponse()
-                res_data = response.read().decode()
-                return json.loads(res_data)
-            except Exception as e:
-                # Reconnect if keep-alive drops
-                try:
-                    conn.close()
-                    conn.connect()
-                    conn.request("POST", f"/bot{config.BOT_TOKEN}/banChatMember", body=data, headers=api_headers)
-                    response = conn.getresponse()
-                    return json.loads(response.read().decode())
-                except Exception as e2:
-                    return {"ok": False, "description": str(e2)}
-                    
-        return await asyncio.to_thread(do_request)
-
-    banned_count = 0
-    fail_count = 0
-    last_error = "None"
-    
-    global_start_t = time.time()
-    for i, uid in enumerate(uids, start=1):
-        if halt_ban:
-            break
-            
-        start_t = time.time()
-        try:
-            res = await ban_via_api(chat_id, uid)
-            if res.get("ok"):
-                banned_count += 1
-            else:
-                fail_count += 1
-                last_error = res.get("description", "Unknown API error")
-                logger.error(f"Failed to ban user {uid}: {last_error}")
-        except Exception as e:
-            fail_count += 1
-            last_error = str(e)
-            logger.error(f"Local fail for {uid}: {e}")
-            
-        elapsed = time.time() - start_t
-            
-        # Update progress and apply timing delays exactly as requested:
-        # We aim for 0.5s per ban iteration. We subtract elapsed HTTP time to keep exactly to 2 users/second.
-        if i % 10 == 0 or i == total_uids:
-            try:
-                prog_text = (f"Ban Process Running\n\n"
-                             f"Total {total_uids}\n"
-                             f"Banned {banned_count}\n"
-                             f"Remaining {total_uids - i}\n"
-                             f"Failed {fail_count}\n\n")
-                             
-                if i % 20 == 0 and i != total_uids and not halt_ban:
-                    prog_text += "5 seconds break\n\n"
-                    
-                prog_text += "Click /stop to stop runnning process..."
-                await status_msg.edit_text(prog_text)
-            except Exception:
-                pass
-                
-        if i % 20 == 0 and i != total_uids and not halt_ban:
-            # Add 5 seconds plus any remaining fraction of the 0.5s window
-            await asyncio.sleep(max(0, 5.0 + 0.5 - elapsed))
-            
-            # Immediately clear the "5 seconds break" text after sleep completes
-            try:
-                prog_text_after = (f"Ban Process Running\n\n"
-                                   f"Total {total_uids}\n"
-                                   f"Banned {banned_count}\n"
-                                   f"Remaining {total_uids - i}\n"
-                                   f"Failed {fail_count}\n\n"
-                                   f"Click /stop to stop runnning process...")
-                await status_msg.edit_text(prog_text_after)
-            except Exception:
-                pass
-        else:
-            if i != total_uids and not halt_ban:
-                await asyncio.sleep(max(0, 0.5 - elapsed))
-                
     time_taken = int(time.time() - global_start_t)
     if time_taken < 60:
         time_str = f"{time_taken} seconds"
@@ -416,12 +406,16 @@ async def ban_command(client: Client, message: Message):
     else:
         final_text = "Ban Process Completed\n\n"
         
-    final_text += (f"Total {total_uids}\n"
+    total_final_str = "All" if target_limit == float('inf') else str(target_limit)
+    final_text += (f"Total {total_final_str}\n"
                    f"Banned {banned_count}\n"
                    f"Failed {fail_count}\n\n"
                    f"Time Taken {time_str}")
         
-    await status_msg.edit_text(final_text)
+    try:
+        await status_msg.edit_text(final_text)
+    except Exception:
+        pass
 
 @app.on_message(filters.command("login") & filters.chat(GROUP_ID))
 async def login_command(client: Client, message: Message):
