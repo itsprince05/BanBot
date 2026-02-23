@@ -7,6 +7,7 @@ from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus, ChatType
 from pyrogram.types import Message
 from pyrogram.errors import SessionPasswordNeeded
+from pyrogram.raw import functions, types
 import config
 
 # Setup logging
@@ -31,11 +32,16 @@ class BotClient(Client):
                 idx = sys.argv.index("--updated")
                 chat_id = int(sys.argv[idx + 1])
                 msg_id = int(sys.argv[idx + 2])
-                await self.edit_message_text(chat_id, msg_id, "Updated\nRestarting...\nBot is live...")
-            except Exception as e:
-                logger.error(f"Failed to edit startup message: {e}")
                 try:
-                    await self.send_message(GROUP_ID, "Bot is live...")
+                    await self.edit_message_text(chat_id, msg_id, "Updated\nRestarting...\nBot is live...")
+                except Exception as e:
+                    logger.error(f"Failed to edit startup message: {e}")
+                # Also send a new message indicating it has started up successfully
+                await self.send_message(GROUP_ID, "Bot is Live...")
+            except Exception as outer_e:
+                logger.error(f"Failed to parse restart tokens: {outer_e}")
+                try:
+                    await self.send_message(GROUP_ID, "Bot is Live...")
                 except Exception:
                     pass
             finally:
@@ -287,35 +293,58 @@ async def ban_command(client: Client, message: Message):
         
     await status_msg.edit_text(f"Fetched {total_uids} members. Starting ban process...")
     
+    try:
+        peer_channel = await client.resolve_peer(chat_id)
+    except Exception as e:
+        await status_msg.edit_text(f"Bot error: Failed to resolve channel peer for banning. Make sure Bot is admin: {e}")
+        return
+
     banned_count = 0
     fail_count = 0
     
     for i, uid in enumerate(uids, start=1):
         try:
-            await client.ban_chat_member(chat_id, uid)
+            # Using raw API to bypass Pyrogram's PeerIdInvalid limitations for un-cached users!
+            await client.invoke(
+                functions.channels.EditBanned(
+                    channel=peer_channel,
+                    participant=types.InputPeerUser(user_id=uid, access_hash=0),
+                    banned_rights=types.ChatBannedRights(
+                        until_date=0,
+                        view_messages=True,
+                        send_messages=True,
+                        send_media=True,
+                        send_stickers=True,
+                        send_gifs=True,
+                        send_games=True,
+                        send_inline=True,
+                        embed_links=True
+                    )
+                )
+            )
             banned_count += 1
         except Exception as e:
             fail_count += 1
-            logger.error(f"Failed to ban {uid}: {e}")
+            logger.error(f"Failed to ban via raw API for {uid}: {e}")
             
-        # Update status periodically every 10 users to avoid Telegram API rate limits on messages
-        if i % 10 == 0 or i == total_uids:
+        # Update progress and apply timing delays exactly as requested:
+        # Since it processes 2 users per second (0.5s delay), every 20 users processed == 10 seconds of processing
+        if i % 20 == 0:
             try:
-                await status_msg.edit_text(f"**Ban Progress:** {i} / {total_uids}\n"
+                await status_msg.edit_text(f"⏳ **Progress Update (10s processed):**\n"
+                                           f"Users Checked: {i} / {total_uids}\n"
                                            f"✅ Banned: {banned_count}\n"
-                                           f"❌ Failed: {fail_count}")
+                                           f"❌ Failed: {fail_count}\n\n"
+                                           f"_Taking a 5s cooling pause to avoid rate limits..._")
             except Exception:
                 pass
-                
-        # Timing Constraints:
-        # Rule 1: 5 second break after every 10 seconds of process (which means 20 users processed)
-        if i % 20 == 0:
-            await asyncio.sleep(5)
-        # Rule 2: 2 users banned per 1 second (so wait 0.5s per ban)
+            if i != total_uids:
+                await asyncio.sleep(5)
         else:
-            await asyncio.sleep(0.5)
+            if i != total_uids:
+                await asyncio.sleep(0.5)
             
-    await status_msg.reply(f"🏁 **Ban process completed for {chat_id}!**\n\nTotal Targeted: {total_uids}\nSuccessfully Banned: {banned_count}\nFailed: {fail_count}")
+    await message.reply(f"🏁 **Ban process completed for {chat_id}!**\n\nTotal Targeted: {total_uids}\nSuccessfully Banned: {banned_count}\nFailed: {fail_count}")
 
 @app.on_message(filters.command("login") & filters.chat(GROUP_ID))
 async def login_command(client: Client, message: Message):
