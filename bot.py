@@ -340,6 +340,7 @@ async def ban_command(client: Client, message: Message):
     fail_count = 0
     last_error = "None"
     
+    global_start_t = time.time()
     for i, uid in enumerate(uids, start=1):
         if halt_ban:
             break
@@ -396,6 +397,19 @@ async def ban_command(client: Client, message: Message):
         else:
             if i != total_uids and not halt_ban:
                 await asyncio.sleep(max(0, 0.5 - elapsed))
+                
+    time_taken = int(time.time() - global_start_t)
+    if time_taken < 60:
+        time_str = f"{time_taken} seconds"
+    elif time_taken < 3600:
+        mins = time_taken // 60
+        secs = time_taken % 60
+        time_str = f"{mins}:{secs:02d}"
+    else:
+        hrs = time_taken // 3600
+        mins = (time_taken % 3600) // 60
+        secs = time_taken % 60
+        time_str = f"{hrs}:{mins:02d}:{secs:02d}"
             
     if halt_ban:
         final_text = "Ban Process Stopped\n\n"
@@ -404,7 +418,8 @@ async def ban_command(client: Client, message: Message):
         
     final_text += (f"Total {total_uids}\n"
                    f"Banned {banned_count}\n"
-                   f"Failed {fail_count}")
+                   f"Failed {fail_count}\n\n"
+                   f"Time Taken {time_str}")
         
     await status_msg.edit_text(final_text)
 
