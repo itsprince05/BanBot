@@ -241,7 +241,7 @@ async def fetch_members_command(client: Client, message: Message):
 async def stop_command(client: Client, message: Message):
     global halt_ban
     halt_ban = True
-    await client.send_message(message.chat.id, "Ban Process Stopped")
+    await client.send_message(message.chat.id, "Ban Process Stopped...")
 
 @app.on_message(filters.command("ban") & filters.chat(GROUP_ID))
 async def ban_command(client: Client, message: Message):
