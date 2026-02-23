@@ -22,6 +22,7 @@ logger = logging.getLogger("Bot")
 GROUP_ID = -1003552827391
 
 login_states = {}
+halt_ban = False
 
 class BotClient(Client):
     async def start(self):
@@ -212,7 +213,7 @@ async def fetch_members_command(client: Client, message: Message):
         uids = []
         async for member in user_client.get_chat_members(chat_id, limit=limit):
             user = member.user
-            if user:
+            if user and member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
                 uids.append(str(user.id))
                 
         if uids:
@@ -231,6 +232,12 @@ async def fetch_members_command(client: Client, message: Message):
     finally:
         if user_client.is_connected:
             await user_client.disconnect()
+
+@app.on_message(filters.command("stop") & filters.chat(GROUP_ID))
+async def stop_command(client: Client, message: Message):
+    global halt_ban
+    halt_ban = True
+    await client.send_message(message.chat.id, "Attempting to halt any active /ban processes... Please wait a few seconds.")
 
 @app.on_message(filters.command("ban") & filters.chat(GROUP_ID))
 async def ban_command(client: Client, message: Message):
@@ -256,6 +263,9 @@ async def ban_command(client: Client, message: Message):
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
     status_msg = await client.send_message(message.chat.id, f"Fetching up to {limit} members from {chat_id} to ban...")
     
+    global halt_ban
+    halt_ban = False
+    
     try:
         await user_client.connect()
         me = await user_client.get_me()
@@ -275,7 +285,7 @@ async def ban_command(client: Client, message: Message):
         uids = []
         async for member in user_client.get_chat_members(chat_id, limit=limit):
             user = member.user
-            if user:
+            if user and member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
                 uids.append(user.id)
                 
         user_raw_peer = await user_client.resolve_peer(chat_id)
@@ -318,6 +328,9 @@ async def ban_command(client: Client, message: Message):
     last_error = "None"
     
     for i, uid in enumerate(uids, start=1):
+        if halt_ban:
+            break
+            
         try:
             res = await ban_via_api(chat_id, uid)
             if res.get("ok"):
@@ -345,20 +358,24 @@ async def ban_command(client: Client, message: Message):
                 await status_msg.edit_text(prog_text)
             except Exception:
                 pass
-            if i != total_uids:
+            if i != total_uids and not halt_ban:
                 await asyncio.sleep(5)
         else:
-            if i != total_uids:
+            if i != total_uids and not halt_ban:
                 await asyncio.sleep(0.5)
             
-    final_text = (f"Ban process completed for {chat_id}!\n\n"
-                  f"Total Targeted: {total_uids}\n"
-                  f"Successfully Banned: {banned_count}\n"
-                  f"Failed: {fail_count}")
+    if halt_ban:
+        final_text = f"Process stopped prematurely by Admin!\n\n"
+    else:
+        final_text = f"Ban process completed for {chat_id}!\n\n"
+        
+    final_text += (f"Total Targeted: {total_uids}\n"
+                   f"Successfully Banned: {banned_count}\n"
+                   f"Failed: {fail_count}")
     if fail_count > 0:
         final_text += f"\n\nLast Error encountered: `{last_error}`"
         
-    await client.send_message(message.chat.id, final_text)
+    await status_msg.edit_text(final_text)
 
 @app.on_message(filters.command("login") & filters.chat(GROUP_ID))
 async def login_command(client: Client, message: Message):
