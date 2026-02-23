@@ -26,10 +26,17 @@ class BotClient(Client):
         # Send startup message only if restarted via /update command
         if os.environ.get("BOT_JUST_UPDATED") == "1":
             try:
-                await self.send_message(GROUP_ID, "Bot is running...")
+                chat_id = int(os.environ.get("BOT_UPDATE_CHAT_ID", GROUP_ID))
+                msg_id = int(os.environ.get("BOT_UPDATE_MSG_ID", 0))
+                if msg_id:
+                    await self.edit_message_text(chat_id, msg_id, "Updated\nRestarting...\nBot is live...")
+                else:
+                    await self.send_message(GROUP_ID, "Bot is live...")
             except Exception as e:
                 logger.error(f"Failed to send startup message: {e}")
             os.environ.pop("BOT_JUST_UPDATED", None)
+            os.environ.pop("BOT_UPDATE_CHAT_ID", None)
+            os.environ.pop("BOT_UPDATE_MSG_ID", None)
 
 # Initialize the Bot client
 app = BotClient(
@@ -80,7 +87,7 @@ async def update_command(client: Client, message: Message):
     try:
         process = subprocess.Popen(["git", "pull"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         out, err = process.communicate()
-        success_text = f"Updated\n\nRestarting..."
+        success_text = f"Updated\nRestarting..."
         await msg.edit_text(success_text)
     except Exception as e:
         await msg.edit_text(f"Error during update: {e}")
@@ -88,6 +95,8 @@ async def update_command(client: Client, message: Message):
         
     # Restart the bot
     os.environ["BOT_JUST_UPDATED"] = "1"
+    os.environ["BOT_UPDATE_CHAT_ID"] = str(msg.chat.id)
+    os.environ["BOT_UPDATE_MSG_ID"] = str(msg.id)
     os.execl(sys.executable, sys.executable, *sys.argv)
 
 @app.on_message(filters.command("login") & filters.chat(GROUP_ID))
@@ -109,6 +118,15 @@ async def login_command(client: Client, message: Message):
     except Exception as e:
         await message.reply(f"Error initializing client: {e}")
         return
+        
+    try:
+        if await user_client.get_me():
+            await message.reply("Already logged in.")
+            await user_client.disconnect()
+            return
+    except Exception:
+        # Not logged in or session expired
+        pass
         
     login_states[user_id] = {
         'step': 'AWAITING_PHONE',
