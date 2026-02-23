@@ -3,6 +3,8 @@ import sys
 import subprocess
 import logging
 import asyncio
+import json
+import urllib.request
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus, ChatType
 from pyrogram.types import Message
@@ -70,7 +72,7 @@ async def start_command(client: Client, message: Message):
     else:
         name = "User"
         
-    await message.reply(f"Hi {name}")
+    await client.send_message(message.chat.id, f"Hi {name}")
 
 @app.on_message(filters.command("update") & filters.chat(GROUP_ID))
 async def update_command(client: Client, message: Message):
@@ -91,10 +93,10 @@ async def update_command(client: Client, message: Message):
         is_admin = True
         
     if not is_admin:
-        await message.reply("Only admins can use this command.")
+        await client.send_message(message.chat.id, "Only admins can use this command.")
         return
         
-    msg = await message.reply("Updating latest code...")
+    msg = await client.send_message(message.chat.id, "Updating latest code...")
     try:
         process = subprocess.Popen(["git", "pull"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         out, err = process.communicate()
@@ -122,7 +124,7 @@ async def check_command(client: Client, message: Message):
     """
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
     
-    status_msg = await message.reply("Checking all groups and channels...\nThis may take a minute...")
+    status_msg = await client.send_message(message.chat.id, "Checking all groups and channels...\nThis may take a minute...")
     result_list = []
     
     try:
@@ -171,7 +173,7 @@ async def check_command(client: Client, message: Message):
         text = "\n\n".join(result_list)
         if len(text) > 4000:
             for i in range(0, len(text), 4000):
-                await message.reply(text[i:i+4000])
+                await client.send_message(message.chat.id, text[i:i+4000])
             await status_msg.delete()
         else:
             await status_msg.edit_text(text)
@@ -189,7 +191,7 @@ async def fetch_members_command(client: Client, message: Message):
     limit = int(match.group(2)) if match.group(2) else 100
     
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
-    status_msg = await message.reply(f"Fetching up to {limit} members from {chat_id}...")
+    status_msg = await client.send_message(message.chat.id, f"Fetching up to {limit} members from {chat_id}...")
     
     try:
         await user_client.connect()
@@ -217,7 +219,7 @@ async def fetch_members_command(client: Client, message: Message):
             text = "\n".join(uids)
             with open("members.txt", "w") as f:
                 f.write(text)
-            await message.reply_document("members.txt", caption=f"Fetched {len(uids)} UIDs from `{chat_id}`")
+            await client.send_document(message.chat.id, document="members.txt", caption=f"Fetched {len(uids)} UIDs from `{chat_id}`")
             os.remove("members.txt")
             await status_msg.delete()
         else:
@@ -239,7 +241,7 @@ async def ban_command(client: Client, message: Message):
     """
     args = message.text.split()
     if len(args) < 3:
-        await message.reply("Usage: /ban <group_id> <limit>")
+        await client.send_message(message.chat.id, "Usage: /ban <group_id> <limit>")
         return
         
     raw_id_str = args[1]
@@ -252,7 +254,7 @@ async def ban_command(client: Client, message: Message):
         chat_id = int(raw_id_str)
         
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
-    status_msg = await message.reply(f"Fetching up to {limit} members from {chat_id} to ban...")
+    status_msg = await client.send_message(message.chat.id, f"Fetching up to {limit} members from {chat_id} to ban...")
     
     try:
         await user_client.connect()
@@ -293,58 +295,54 @@ async def ban_command(client: Client, message: Message):
         await status_msg.edit_text("No members found or couldn't fetch any to ban.")
         return
         
-    await status_msg.edit_text(f"Fetched {total_uids} members. Starting ban process...")
+    await status_msg.edit_text(f"Fetched {total_uids} members. Starting ban process via HTTP API...")
     
-    try:
-        if hasattr(user_raw_peer, 'access_hash'):
-            peer_channel = types.InputChannel(channel_id=user_raw_peer.channel_id, access_hash=user_raw_peer.access_hash)
-        else:
-            peer_channel = None
-    except Exception as e:
-        await status_msg.edit_text(f"Bot error: Failed to parse channel peer. {e}")
-        return
+    async def ban_via_api(target_chat, target_user):
+        url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/banChatMember"
+        data = json.dumps({"chat_id": target_chat, "user_id": target_user}).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
+        
+        def do_request():
+            try:
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    return json.loads(response.read().decode())
+            except urllib.error.HTTPError as e:
+                return json.loads(e.read().decode())
+            except Exception as e:
+                return {"ok": False, "description": str(e)}
+                
+        return await asyncio.to_thread(do_request)
 
     banned_count = 0
     fail_count = 0
+    last_error = "None"
     
     for i, uid in enumerate(uids, start=1):
         try:
-            if peer_channel:
-                # Using raw API to bypass Pyrogram's PeerIdInvalid limitations for un-cached users!
-                await client.invoke(
-                    functions.channels.EditBanned(
-                        channel=peer_channel,
-                        participant=types.InputPeerUser(user_id=uid, access_hash=0),
-                        banned_rights=types.ChatBannedRights(
-                            until_date=0,
-                            view_messages=True,
-                            send_messages=True,
-                            send_media=True,
-                            send_stickers=True,
-                            send_gifs=True,
-                            send_games=True,
-                            send_inline=True,
-                            embed_links=True
-                        )
-                    )
-                )
+            res = await ban_via_api(chat_id, uid)
+            if res.get("ok"):
+                banned_count += 1
             else:
-                # Fallback for basic groups
-                await client.ban_chat_member(chat_id, uid)
-            banned_count += 1
+                fail_count += 1
+                last_error = res.get("description", "Unknown API error")
+                logger.error(f"Failed to ban user {uid}: {last_error}")
         except Exception as e:
             fail_count += 1
-            logger.error(f"Failed to ban via raw API for {uid}: {e}")
+            last_error = str(e)
+            logger.error(f"Local fail for {uid}: {e}")
             
         # Update progress and apply timing delays exactly as requested:
         # Since it processes 2 users per second (0.5s delay), every 20 users processed == 10 seconds of processing
         if i % 20 == 0:
             try:
-                await status_msg.edit_text(f"⏳ **Progress Update (10s processed):**\n"
-                                           f"Users Checked: {i} / {total_uids}\n"
-                                           f"✅ Banned: {banned_count}\n"
-                                           f"❌ Failed: {fail_count}\n\n"
-                                           f"_Taking a 5s cooling pause to avoid rate limits..._")
+                prog_text = (f"Progress Update (10s processed):\n"
+                             f"Users Checked: {i} / {total_uids}\n"
+                             f"Banned: {banned_count}\n"
+                             f"Failed: {fail_count}\n")
+                if fail_count > 0:
+                    prog_text += f"Last Error: `{last_error}`\n"
+                prog_text += f"\n_Taking a 5s cooling pause to avoid rate limits..._"
+                await status_msg.edit_text(prog_text)
             except Exception:
                 pass
             if i != total_uids:
@@ -353,7 +351,14 @@ async def ban_command(client: Client, message: Message):
             if i != total_uids:
                 await asyncio.sleep(0.5)
             
-    await message.reply(f"🏁 **Ban process completed for {chat_id}!**\n\nTotal Targeted: {total_uids}\nSuccessfully Banned: {banned_count}\nFailed: {fail_count}")
+    final_text = (f"Ban process completed for {chat_id}!\n\n"
+                  f"Total Targeted: {total_uids}\n"
+                  f"Successfully Banned: {banned_count}\n"
+                  f"Failed: {fail_count}")
+    if fail_count > 0:
+        final_text += f"\n\nLast Error encountered: `{last_error}`"
+        
+    await client.send_message(message.chat.id, final_text)
 
 @app.on_message(filters.command("login") & filters.chat(GROUP_ID))
 async def login_command(client: Client, message: Message):
@@ -365,19 +370,19 @@ async def login_command(client: Client, message: Message):
         return
         
     if user_id in login_states:
-        await message.reply("Login process is already running. Send /cancel to stop it.")
+        await client.send_message(message.chat.id, "Login process is already running. Send /cancel to stop it.")
         return
         
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
     try:
         await user_client.connect()
     except Exception as e:
-        await message.reply(f"Error initializing client: {e}")
+        await client.send_message(message.chat.id, f"Error initializing client: {e}")
         return
         
     try:
         if await user_client.get_me():
-            await message.reply("Already logged in.")
+            await client.send_message(message.chat.id, "Already logged in.")
             await user_client.disconnect()
             return
     except Exception:
@@ -388,7 +393,7 @@ async def login_command(client: Client, message: Message):
         'step': 'AWAITING_PHONE',
         'client': user_client
     }
-    await message.reply("Please send your phone number with country code (e.g. +919876543210).")
+    await client.send_message(message.chat.id, "Please send your phone number with country code (e.g. +919876543210).")
 
 @app.on_message(filters.command("cancel") & filters.chat(GROUP_ID))
 async def cancel_login(client: Client, message: Message):
@@ -401,9 +406,9 @@ async def cancel_login(client: Client, message: Message):
         if user_client.is_connected:
             await user_client.disconnect()
         del login_states[user_id]
-        await message.reply("Login process cancelled.")
+        await client.send_message(message.chat.id, "Login process cancelled.")
     else:
-        await message.reply("No login process is currently running.")
+        await client.send_message(message.chat.id, "No login process is currently running.")
 
 @app.on_message(filters.chat(GROUP_ID) & filters.text & ~filters.command(["login", "cancel", "start", "update"]))
 async def handle_login_steps(client: Client, message: Message):
@@ -423,9 +428,9 @@ async def handle_login_steps(client: Client, message: Message):
             sent_code = await user_client.send_code(phone)
             state['phone_code_hash'] = sent_code.phone_code_hash
             state['step'] = 'AWAITING_CODE'
-            await message.reply("Code sent! Please enter the code. If your code is 12345, please send it with a space like 1 2 3 4 5 so telegram doesn't expire it.")
+            await client.send_message(message.chat.id, "Code sent! Please enter the code. If your code is 12345, please send it with a space like 1 2 3 4 5 so telegram doesn't expire it.")
         except Exception as e:
-            await message.reply(f"Error sending code: {e}")
+            await client.send_message(message.chat.id, f"Error sending code: {e}")
             if user_client.is_connected:
                 await user_client.disconnect()
             del login_states[user_id]
@@ -437,15 +442,15 @@ async def handle_login_steps(client: Client, message: Message):
         
         try:
             await user_client.sign_in(phone, phone_code_hash, code)
-            await message.reply("Login successful! Session saved as 'user_session.session'.")
+            await client.send_message(message.chat.id, "Login successful! Session saved as 'user_session.session'.")
             if user_client.is_connected:
                 await user_client.disconnect()
             del login_states[user_id]
         except SessionPasswordNeeded:
             state['step'] = 'AWAITING_PASSWORD'
-            await message.reply("2-Step Verification is enabled. Please enter your password.")
+            await client.send_message(message.chat.id, "2-Step Verification is enabled. Please enter your password.")
         except Exception as e:
-            await message.reply(f"Error signing in: {e}")
+            await client.send_message(message.chat.id, f"Error signing in: {e}")
             if user_client.is_connected:
                 await user_client.disconnect()
             del login_states[user_id]
@@ -454,12 +459,12 @@ async def handle_login_steps(client: Client, message: Message):
         password = text.strip()
         try:
             await user_client.check_password(password)
-            await message.reply("Login successful! Session saved as 'user_session.session'.")
+            await client.send_message(message.chat.id, "Login successful! Session saved as 'user_session.session'.")
             if user_client.is_connected:
                 await user_client.disconnect()
             del login_states[user_id]
         except Exception as e:
-            await message.reply(f"Error checking password: {e}")
+            await client.send_message(message.chat.id, f"Error checking password: {e}")
             if user_client.is_connected:
                 await user_client.disconnect()
             del login_states[user_id]
