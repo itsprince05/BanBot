@@ -23,20 +23,24 @@ class BotClient(Client):
     async def start(self):
         await super().start()
         logger.info("Bot started successfully.")
-        # Send startup message only if restarted via /update command
-        if os.environ.get("BOT_JUST_UPDATED") == "1":
+        
+        # Check command structure for restart tokens
+        if "--updated" in sys.argv:
             try:
-                chat_id = int(os.environ.get("BOT_UPDATE_CHAT_ID", GROUP_ID))
-                msg_id = int(os.environ.get("BOT_UPDATE_MSG_ID", 0))
-                if msg_id:
-                    await self.edit_message_text(chat_id, msg_id, "Updated\nRestarting...\nBot is live...")
-                else:
-                    await self.send_message(GROUP_ID, "Bot is live...")
+                idx = sys.argv.index("--updated")
+                chat_id = int(sys.argv[idx + 1])
+                msg_id = int(sys.argv[idx + 2])
+                await self.edit_message_text(chat_id, msg_id, "Updated\nRestarting...\nBot is live...")
             except Exception as e:
-                logger.error(f"Failed to send startup message: {e}")
-            os.environ.pop("BOT_JUST_UPDATED", None)
-            os.environ.pop("BOT_UPDATE_CHAT_ID", None)
-            os.environ.pop("BOT_UPDATE_MSG_ID", None)
+                logger.error(f"Failed to edit startup message: {e}")
+                try:
+                    await self.send_message(GROUP_ID, "Bot is live...")
+                except Exception:
+                    pass
+            finally:
+                # Remove from sys.argv so it doesn't leak into further reloads if not handled
+                idx = sys.argv.index("--updated")
+                del sys.argv[idx:idx+3]
 
 # Initialize the Bot client
 app = BotClient(
@@ -94,10 +98,14 @@ async def update_command(client: Client, message: Message):
         return
         
     # Restart the bot
-    os.environ["BOT_JUST_UPDATED"] = "1"
-    os.environ["BOT_UPDATE_CHAT_ID"] = str(msg.chat.id)
-    os.environ["BOT_UPDATE_MSG_ID"] = str(msg.id)
-    os.execve(sys.executable, [sys.executable] + sys.argv, os.environ)
+    args = [sys.executable] + sys.argv
+    # Clean up any existing --updated args to avoid duplicates
+    if "--updated" in args:
+        idx = args.index("--updated")
+        del args[idx:idx+3]
+        
+    args.extend(["--updated", str(msg.chat.id), str(msg.id)])
+    os.execl(sys.executable, *args)
 
 @app.on_message(filters.command("check") & filters.chat(GROUP_ID))
 async def check_command(client: Client, message: Message):
@@ -159,7 +167,7 @@ async def check_command(client: Client, message: Message):
         else:
             await status_msg.edit_text(text)
     else:
-        await status_msg.edit_text("No groups or channels found where both you and @Ban_Karne_Wala_Bot are admins with ban rights.")
+        await status_msg.edit_text("No groups or channels found where both you and @Ban_Karne_Wala_Bot are admins with ban permissions.")
 
 @app.on_message(filters.regex(r"^/(-\d+)(?:\s+(\d+))?$") & filters.chat(GROUP_ID))
 async def fetch_members_command(client: Client, message: Message):
@@ -167,7 +175,14 @@ async def fetch_members_command(client: Client, message: Message):
     Fetches 'n' amount of UIDs from a given /<id> group or channel using the user session.
     """
     match = message.matches[0]
-    chat_id = int(match.group(1))
+    raw_id_str = match.group(1)
+    
+    # Telegram supergroups/channels require -100 prefix for API calls
+    if raw_id_str.startswith("-") and not raw_id_str.startswith("-100"):
+        chat_id = int("-100" + raw_id_str[1:])
+    else:
+        chat_id = int(raw_id_str)
+        
     limit = int(match.group(2)) if match.group(2) else 100
     
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
