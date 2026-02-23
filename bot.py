@@ -6,6 +6,7 @@ import asyncio
 import json
 import urllib.request
 import time
+import http.client
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus, ChatType
 from pyrogram.types import Message
@@ -37,14 +38,16 @@ class BotClient(Client):
                 chat_id = int(sys.argv[idx + 1])
                 msg_id = int(sys.argv[idx + 2])
                 try:
-                    await self.edit_message_text(chat_id, msg_id, "Updated\nRestarting...\nBot is live...")
+                    await self.edit_message_text(chat_id, msg_id, "Updated\nRestarting...")
                 except Exception as e:
                     logger.error(f"Failed to edit startup message: {e}")
                 # Also send a new message indicating it has started up successfully
+                await asyncio.sleep(2)
                 await self.send_message(GROUP_ID, "Bot is Live...")
             except Exception as outer_e:
                 logger.error(f"Failed to parse restart tokens: {outer_e}")
                 try:
+                    await asyncio.sleep(2)
                     await self.send_message(GROUP_ID, "Bot is Live...")
                 except Exception:
                     pass
@@ -95,7 +98,7 @@ async def update_command(client: Client, message: Message):
         is_admin = True
         
     if not is_admin:
-        await client.send_message(message.chat.id, "Only admins can use this command.")
+        await client.send_message(message.chat.id, "Only admins can use this command...")
         return
         
     msg = await client.send_message(message.chat.id, "Updating latest code...")
@@ -105,7 +108,7 @@ async def update_command(client: Client, message: Message):
         success_text = f"Updated\nRestarting..."
         await msg.edit_text(success_text)
     except Exception as e:
-        await msg.edit_text(f"Error during update: {e}")
+        await msg.edit_text(f"Error during update...")
         return
         
     # Restart the bot
@@ -155,7 +158,7 @@ async def check_command(client: Client, message: Message):
                                     title = chat.title or "Unknown"
                                     # Removing minus sign for cleaner pure ID copy/paste format
                                     raw_id = str(chat.id).replace("-", "")
-                                    result_list.append(f"`{raw_id}` {member_count} {title}")
+                                    result_list.append(f"`{raw_id}`\n{member_count} members\n{title}")
                         except Exception:
                             # Bot might not be in the group, or missing privileges info, skip it
                             pass
@@ -163,7 +166,7 @@ async def check_command(client: Client, message: Message):
                     # User is not admin or missing info, skip
                     pass
     except Exception as e:
-        await status_msg.edit_text(f"Error while checking: {e}")
+        await status_msg.edit_text(f"Error: {e}")
         if user_client.is_connected:
             await user_client.disconnect()
         return
@@ -180,7 +183,7 @@ async def check_command(client: Client, message: Message):
         else:
             await status_msg.edit_text(text)
     else:
-        await status_msg.edit_text("No groups or channels found where both you and @Ban_Karne_Wala_Bot are admins with ban permissions.")
+        await status_msg.edit_text("No groups or channels found where both you and Bot are admins with ban permissions...")
 
 @app.on_message(filters.regex(r"^/(-\d+)(?:\s+(\d+))?$") & filters.chat(GROUP_ID))
 async def fetch_members_command(client: Client, message: Message):
@@ -225,10 +228,10 @@ async def fetch_members_command(client: Client, message: Message):
             os.remove("members.txt")
             await status_msg.delete()
         else:
-            await status_msg.edit_text("No members found or couldn't fetch.")
+            await status_msg.edit_text("No members found or couldn't fetch...")
             
     except Exception as e:
-        await status_msg.edit_text(f"Error fetching members: {e}")
+        await status_msg.edit_text(f"Error: {e}")
         
     finally:
         if user_client.is_connected:
@@ -238,7 +241,7 @@ async def fetch_members_command(client: Client, message: Message):
 async def stop_command(client: Client, message: Message):
     global halt_ban
     halt_ban = True
-    await client.send_message(message.chat.id, "Attempting to halt any active /ban processes... Please wait a few seconds.")
+    await client.send_message(message.chat.id, "Attempting to halt any active /ban processes... Please wait a few seconds...")
 
 @app.on_message(filters.command("ban") & filters.chat(GROUP_ID))
 async def ban_command(client: Client, message: Message):
@@ -303,25 +306,34 @@ async def ban_command(client: Client, message: Message):
             
     total_uids = len(uids)
     if total_uids == 0:
-        await status_msg.edit_text("No members found or couldn't fetch any to ban.")
+        await status_msg.edit_text("No members found or couldn't fetch any to ban...")
         return
         
-    await status_msg.edit_text(f"Fetched {total_uids} members. Starting ban process via HTTP API...")
+    await status_msg.edit_text(f"Fetched {total_uids} members...\nStarting ban process via HTTP API...")
+    
+    conn = http.client.HTTPSConnection("api.telegram.org")
+    api_headers = {"Content-Type": "application/json", "Connection": "keep-alive"}
     
     async def ban_via_api(target_chat, target_user):
-        url = f"https://api.telegram.org/bot{config.BOT_TOKEN}/banChatMember"
         data = json.dumps({"chat_id": target_chat, "user_id": target_user}).encode("utf-8")
-        req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
         
         def do_request():
             try:
-                with urllib.request.urlopen(req, timeout=10) as response:
-                    return json.loads(response.read().decode())
-            except urllib.error.HTTPError as e:
-                return json.loads(e.read().decode())
+                conn.request("POST", f"/bot{config.BOT_TOKEN}/banChatMember", body=data, headers=api_headers)
+                response = conn.getresponse()
+                res_data = response.read().decode()
+                return json.loads(res_data)
             except Exception as e:
-                return {"ok": False, "description": str(e)}
-                
+                # Reconnect if keep-alive drops
+                try:
+                    conn.close()
+                    conn.connect()
+                    conn.request("POST", f"/bot{config.BOT_TOKEN}/banChatMember", body=data, headers=api_headers)
+                    response = conn.getresponse()
+                    return json.loads(response.read().decode())
+                except Exception as e2:
+                    return {"ok": False, "description": str(e2)}
+                    
         return await asyncio.to_thread(do_request)
 
     banned_count = 0
@@ -361,7 +373,7 @@ async def ban_command(client: Client, message: Message):
                 if i % 20 == 0 and i != total_uids and not halt_ban:
                     prog_text += "5 seconds break\n\n"
                     
-                prog_text += "Click /stop to stop runnning process"
+                prog_text += "Click /stop to stop runnning process..."
                 await status_msg.edit_text(prog_text)
             except Exception:
                 pass
@@ -369,6 +381,18 @@ async def ban_command(client: Client, message: Message):
         if i % 20 == 0 and i != total_uids and not halt_ban:
             # Add 5 seconds plus any remaining fraction of the 0.5s window
             await asyncio.sleep(max(0, 5.0 + 0.5 - elapsed))
+            
+            # Immediately clear the "5 seconds break" text after sleep completes
+            try:
+                prog_text_after = (f"Ban Process Running\n\n"
+                                   f"Total {total_uids}\n"
+                                   f"Banned {banned_count}\n"
+                                   f"Remaining {total_uids - i}\n"
+                                   f"Failed {fail_count}\n\n"
+                                   f"Click /stop to stop runnning process...")
+                await status_msg.edit_text(prog_text_after)
+            except Exception:
+                pass
         else:
             if i != total_uids and not halt_ban:
                 await asyncio.sleep(max(0, 0.5 - elapsed))
@@ -394,7 +418,7 @@ async def login_command(client: Client, message: Message):
         return
         
     if user_id in login_states:
-        await client.send_message(message.chat.id, "Login process is already running. Send /cancel to stop it.")
+        await client.send_message(message.chat.id, "Login process is already running... \nSend /cancel to stop it...")
         return
         
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
@@ -406,7 +430,7 @@ async def login_command(client: Client, message: Message):
         
     try:
         if await user_client.get_me():
-            await client.send_message(message.chat.id, "Already logged in.")
+            await client.send_message(message.chat.id, "Already logged in...")
             await user_client.disconnect()
             return
     except Exception:
@@ -417,7 +441,7 @@ async def login_command(client: Client, message: Message):
         'step': 'AWAITING_PHONE',
         'client': user_client
     }
-    await client.send_message(message.chat.id, "Please send your phone number with country code (e.g. +919876543210).")
+    await client.send_message(message.chat.id, "Please send your phone number with country code\ne.g. +919876543210")
 
 @app.on_message(filters.command("cancel") & filters.chat(GROUP_ID))
 async def cancel_login(client: Client, message: Message):
@@ -430,9 +454,9 @@ async def cancel_login(client: Client, message: Message):
         if user_client.is_connected:
             await user_client.disconnect()
         del login_states[user_id]
-        await client.send_message(message.chat.id, "Login process cancelled.")
+        await client.send_message(message.chat.id, "Login process cancelled...")
     else:
-        await client.send_message(message.chat.id, "No login process is currently running.")
+        await client.send_message(message.chat.id, "No login process is currently running...")
 
 @app.on_message(filters.chat(GROUP_ID) & filters.text & ~filters.command(["login", "cancel", "start", "update"]))
 async def handle_login_steps(client: Client, message: Message):
@@ -452,7 +476,7 @@ async def handle_login_steps(client: Client, message: Message):
             sent_code = await user_client.send_code(phone)
             state['phone_code_hash'] = sent_code.phone_code_hash
             state['step'] = 'AWAITING_CODE'
-            await client.send_message(message.chat.id, "Code sent! Please enter the code. If your code is 12345, please send it with a space like 1 2 3 4 5 so telegram doesn't expire it.")
+            await client.send_message(message.chat.id, "Code sent! Please enter the code... \nIf your code is 12345, please send it with a space like 1 2 3 4 5")
         except Exception as e:
             await client.send_message(message.chat.id, f"Error sending code: {e}")
             if user_client.is_connected:
@@ -466,13 +490,13 @@ async def handle_login_steps(client: Client, message: Message):
         
         try:
             await user_client.sign_in(phone, phone_code_hash, code)
-            await client.send_message(message.chat.id, "Login successful! Session saved as 'user_session.session'.")
+            await client.send_message(message.chat.id, "Login successful...")
             if user_client.is_connected:
                 await user_client.disconnect()
             del login_states[user_id]
         except SessionPasswordNeeded:
             state['step'] = 'AWAITING_PASSWORD'
-            await client.send_message(message.chat.id, "2-Step Verification is enabled. Please enter your password.")
+            await client.send_message(message.chat.id, "2-Step Verification is enabled...\nPlease enter your password...")
         except Exception as e:
             await client.send_message(message.chat.id, f"Error signing in: {e}")
             if user_client.is_connected:
@@ -483,7 +507,7 @@ async def handle_login_steps(client: Client, message: Message):
         password = text.strip()
         try:
             await user_client.check_password(password)
-            await client.send_message(message.chat.id, "Login successful! Session saved as 'user_session.session'.")
+            await client.send_message(message.chat.id, "Login successful...")
             if user_client.is_connected:
                 await user_client.disconnect()
             del login_states[user_id]
