@@ -175,13 +175,7 @@ async def fetch_members_command(client: Client, message: Message):
     Fetches 'n' amount of UIDs from a given /<id> group or channel using the user session.
     """
     match = message.matches[0]
-    raw_id_str = match.group(1)
-    
-    # Telegram supergroups/channels require -100 prefix for API calls
-    if raw_id_str.startswith("-") and not raw_id_str.startswith("-100"):
-        chat_id = int("-100" + raw_id_str[1:])
-    else:
-        chat_id = int(raw_id_str)
+    chat_id = int(match.group(1))
         
     limit = int(match.group(2)) if match.group(2) else 100
     
@@ -194,6 +188,16 @@ async def fetch_members_command(client: Client, message: Message):
         if not me:
             raise Exception("Session expired or not logged in.")
             
+        try:
+            chat = await user_client.get_chat(chat_id)
+        except Exception:
+            await status_msg.edit_text("Caching peer info...")
+            async for _ in user_client.get_dialogs(limit=200):
+                pass
+            chat = await user_client.get_chat(chat_id)
+            
+        await status_msg.edit_text(f"Fetching members from {chat.title or chat_id}...")
+        
         uids = []
         async for member in user_client.get_chat_members(chat_id, limit=limit):
             user = member.user
