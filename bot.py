@@ -142,7 +142,7 @@ async def check_command(client: Client, message: Message):
             raise Exception("Session expired or not logged in. Send /login first.")
             
         async for dialog in user_client.get_dialogs():
-            if dialog.chat.id == GROUP_ID:
+            if dialog.chat.id in [GROUP_ID, -1003552827391]:
                 continue
                 
             if dialog.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
