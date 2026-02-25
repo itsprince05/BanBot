@@ -72,9 +72,13 @@ async def start_command(client: Client, message: Message):
         name = message.sender_chat.username if message.sender_chat.username else message.sender_chat.title
     else:
         name = "User"
-    await client.send_message(message.chat.id, f"Hi {name}")
+        
+    chat_title = message.chat.title if message.chat.title else "Private Chat"
+    chat_id = message.chat.id
+    
+    await client.send_message(message.chat.id, f"Hi {name}\n\n{chat_title}\n`{chat_id}`")
 
-@app.on_message(filters.command("update") & filters.chat(GROUP_ID))
+@app.on_message(filters.command("update"))
 async def update_command(client: Client, message: Message):
     is_admin = False
     if message.from_user:
@@ -109,7 +113,7 @@ async def update_command(client: Client, message: Message):
     args.extend(["--updated", str(msg.chat.id), str(msg.id)])
     os.execl(sys.executable, *args)
 
-@app.on_message(filters.command("check") & filters.chat(GROUP_ID))
+@app.on_message(filters.command("check"))
 async def check_command(client: Client, message: Message):
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
     status_msg = await client.send_message(message.chat.id, "Checking all groups and channels...\nThis may take a minute...")
@@ -162,7 +166,7 @@ async def check_command(client: Client, message: Message):
     else:
         await status_msg.delete()
 
-@app.on_message(filters.command("stop") & filters.chat(GROUP_ID))
+@app.on_message(filters.command("stop"))
 async def stop_command(client: Client, message: Message):
     global halt_ban
     halt_ban = True
@@ -282,74 +286,59 @@ async def run_ban_process(client, status_msg, chat_id, target_limit, mode="norma
     last_progress_t = time.time()
     
     try:
-        while total_processed < target_limit and not halt_ban:
-            fetch_amount = min(100, target_limit - total_processed) if target_limit != float('inf') else 100
-            uids = []
-            
-            try:
-                if mode == "link":
-                    async for joiner in user_client.get_chat_invite_link_joiners(chat_id, invite_link=invite_link):
-                        if joiner.user and joiner.user.id not in seen_uids:
-                            uids.append(joiner.user.id)
-                            seen_uids.add(joiner.user.id)
-                            if len(uids) >= fetch_amount:
-                                break
-                else:
-                    async for member in user_client.get_chat_members(chat_id):
-                        if member.user and member.user.id not in seen_uids:
-                            is_zombie = member.user.is_deleted
-                            valid_admin_status = member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
-                            if valid_admin_status:
-                                if mode == "zombies" and not is_zombie:
-                                    continue
-                                uids.append(member.user.id)
-                                seen_uids.add(member.user.id)
-                                if len(uids) >= fetch_amount:
-                                    break
-            except Exception as e:
-                logger.error(f"Error chunk: {e}")
-                
-            if not uids:
+        iterator = user_client.get_chat_invite_link_joiners(chat_id, invite_link=invite_link) if mode == "link" else user_client.get_chat_members(chat_id)
+        
+        async for item in iterator:
+            if halt_ban or total_processed >= target_limit:
                 break
                 
-            for uid in uids:
-                if halt_ban:
-                    break
-                    
-                if global_start_t is None:
-                    global_start_t = time.time()
-                    
-                start_t = time.time()
-                try:
-                    res = await ban_via_api(chat_id, uid)
-                    if res.get("ok"):
-                        banned_count += 1
-                    else:
-                        fail_count += 1
-                except Exception:
-                    fail_count += 1
-                    
-                total_processed += 1
-                elapsed = time.time() - start_t
+            member_user = item.user
+            if not member_user or member_user.id in seen_uids:
+                continue
                 
-                current_t = time.time()
-                if current_t - last_progress_t >= 5.0 or total_processed == target_limit:
-                    try:
-                        total_str = "All" if target_limit == float('inf') else str(target_limit)
-                        rem_str = "Calculating..." if target_limit == float('inf') else str(target_limit - total_processed)
-                        prog_text = (f"Ban Process Running\n\n"
-                                     f"Total {total_str}\n"
-                                     f"Banned {banned_count}\n"
-                                     f"Remaining {rem_str}\n"
-                                     f"Failed {fail_count}\n\n"
-                                     f"Click /stop to stop runnning process...")
-                        await status_msg.edit_text(prog_text)
-                        last_progress_t = current_t
-                    except Exception:
-                        pass
-                        
-                if not halt_ban:
-                    await asyncio.sleep(max(0, 0.5 - elapsed))
+            if mode != "link":
+                if item.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                    continue
+                if mode == "zombies" and not member_user.is_deleted:
+                    continue
+
+            uid = member_user.id
+            seen_uids.add(uid)
+            
+            if global_start_t is None:
+                global_start_t = time.time()
+                
+            start_t = time.time()
+            try:
+                res = await ban_via_api(chat_id, uid)
+                if res.get("ok"):
+                    banned_count += 1
+                else:
+                    fail_count += 1
+            except Exception:
+                fail_count += 1
+                
+            total_processed += 1
+            elapsed = time.time() - start_t
+            
+            current_t = time.time()
+            if current_t - last_progress_t >= 5.0 or total_processed == target_limit:
+                try:
+                    total_str = "All" if target_limit == float('inf') else str(target_limit)
+                    rem_str = "Calculating..." if target_limit == float('inf') else str(target_limit - total_processed)
+                    prog_text = (f"Ban Process Running\n\n"
+                                 f"Total {total_str}\n"
+                                 f"Banned {banned_count}\n"
+                                 f"Remaining {rem_str}\n"
+                                 f"Failed {fail_count}\n\n"
+                                 f"Click /stop to stop runnning process...")
+                    await status_msg.edit_text(prog_text)
+                    last_progress_t = current_t
+                except Exception:
+                    pass
+                    
+            if not halt_ban:
+                await asyncio.sleep(max(0, 0.5 - elapsed))
                     
     except Exception as e:
         await status_msg.edit_text(f"Error during ban loop process: {e}")
@@ -388,7 +377,7 @@ async def run_ban_process(client, status_msg, chat_id, target_limit, mode="norma
 
 # ----------------- LOGIN AND TEXT HANDLERS ----------------- #
 
-@app.on_message(filters.command("login") & filters.chat(GROUP_ID))
+@app.on_message(filters.command("login"))
 async def login_command(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else None
     if not user_id: return
@@ -414,7 +403,7 @@ async def login_command(client: Client, message: Message):
     login_states[user_id] = {'step': 'AWAITING_PHONE', 'client': user_client}
     await client.send_message(message.chat.id, "Please send your phone number with country code\ne.g. +919876543210")
 
-@app.on_message(filters.command("cancel") & filters.chat(GROUP_ID))
+@app.on_message(filters.command("cancel"))
 async def cancel_login(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else None
     if not user_id: return
@@ -427,7 +416,7 @@ async def cancel_login(client: Client, message: Message):
     else:
         await client.send_message(message.chat.id, "No login process is currently running...")
 
-@app.on_message(filters.chat(GROUP_ID) & filters.text & ~filters.command(["login", "cancel", "start", "update", "check", "stop"]))
+@app.on_message(filters.text & ~filters.command(["login", "cancel", "start", "update", "check", "stop"]))
 async def handle_text_steps(client: Client, message: Message):
     text = message.text.strip()
     user_id = message.from_user.id if message.from_user else None
