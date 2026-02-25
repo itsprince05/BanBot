@@ -28,6 +28,35 @@ user_states = {}
 link_cache = {}
 halt_ban = False
 
+async def check_admin(_, client: Client, message: Message):
+    if not message.chat or message.chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
+        return False
+    if message.sender_chat and message.sender_chat.id == message.chat.id:
+        return True
+    if message.from_user:
+        try:
+            member = await client.get_chat_member(message.chat.id, message.from_user.id)
+            return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+        except Exception:
+            return False
+    return False
+
+admin_filter = filters.create(check_admin)
+
+async def check_cb_admin(_, client: Client, cb: CallbackQuery):
+    message = cb.message
+    if not message or not message.chat or message.chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
+        return False
+    if cb.from_user:
+        try:
+            member = await client.get_chat_member(message.chat.id, cb.from_user.id)
+            return member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+        except Exception:
+            return False
+    return False
+
+cb_admin = filters.create(check_cb_admin)
+
 class BotClient(Client):
     async def start(self):
         await super().start()
@@ -80,23 +109,8 @@ async def start_command(client: Client, message: Message):
     else:
         await client.send_message(message.chat.id, f"Hey {name}")
 
-@app.on_message(filters.command("update"))
+@app.on_message(filters.command("update") & admin_filter)
 async def update_command(client: Client, message: Message):
-    is_admin = False
-    if message.from_user:
-        try:
-            member = await client.get_chat_member(GROUP_ID, message.from_user.id)
-            if member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-                is_admin = True
-        except Exception as e:
-            logger.error(f"Error checking admin status: {e}")
-    elif message.sender_chat and message.sender_chat.id == GROUP_ID:
-        is_admin = True
-        
-    if not is_admin:
-        await client.send_message(message.chat.id, "Only admins can use this command...")
-        return
-        
     msg = await client.send_message(message.chat.id, "Updating latest code...")
     try:
         process = subprocess.Popen(["git", "pull"], stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -115,7 +129,7 @@ async def update_command(client: Client, message: Message):
     args.extend(["--updated", str(msg.chat.id), str(msg.id)])
     os.execl(sys.executable, *args)
 
-@app.on_message(filters.command("check"))
+@app.on_message(filters.command("check") & admin_filter)
 async def check_command(client: Client, message: Message):
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
     status_msg = await client.send_message(message.chat.id, "Checking all groups and channels...\nThis may take a minute...")
@@ -168,7 +182,7 @@ async def check_command(client: Client, message: Message):
     else:
         await status_msg.delete()
 
-@app.on_message(filters.command("stop"))
+@app.on_message(filters.command("stop") & admin_filter)
 async def stop_command(client: Client, message: Message):
     global halt_ban
     halt_ban = True
@@ -176,7 +190,7 @@ async def stop_command(client: Client, message: Message):
 
 # ----------------- CALLBACK QUERIES ----------------- #
 
-@app.on_callback_query(filters.regex(r"^b_all_(-\d+)$"))
+@app.on_callback_query(filters.regex(r"^b_all_(-\d+)$") & cb_admin)
 async def cb_ban_all(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
     keyboard = InlineKeyboardMarkup([
@@ -185,7 +199,7 @@ async def cb_ban_all(client, cb: CallbackQuery):
     ])
     await cb.message.edit_text(f"Are you sure you want to ban all members in `{chat_id}`?", reply_markup=keyboard)
     
-@app.on_callback_query(filters.regex(r"^b_zombi_(-\d+)$"))
+@app.on_callback_query(filters.regex(r"^b_zombi_(-\d+)$") & cb_admin)
 async def cb_ban_zombi(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
     keyboard = InlineKeyboardMarkup([
@@ -194,7 +208,7 @@ async def cb_ban_zombi(client, cb: CallbackQuery):
     ])
     await cb.message.edit_text(f"Are you sure you want to ban all deleted zombie accounts in `{chat_id}`?", reply_markup=keyboard)
 
-@app.on_callback_query(filters.regex(r"^b_link_all_(-\d+)$"))
+@app.on_callback_query(filters.regex(r"^b_link_all_(-\d+)$") & cb_admin)
 async def cb_ban_link_all(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
     keyboard = InlineKeyboardMarkup([
@@ -203,7 +217,7 @@ async def cb_ban_link_all(client, cb: CallbackQuery):
     ])
     await cb.message.edit_text(f"Are you sure you want to ban all members joined by the given link?", reply_markup=keyboard)
 
-@app.on_callback_query(filters.regex(r"^[bl]_cust_(-\d+)$"))
+@app.on_callback_query(filters.regex(r"^[bl]_cust_(-\d+)$") & cb_admin)
 async def cb_ban_cust(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
     mode = "link" if cb.data.startswith("l_") else "normal"
@@ -215,7 +229,7 @@ async def cb_ban_cust(client, cb: CallbackQuery):
     await cb.message.reply_text(f"Please enter the number of members to ban in `{chat_id}`:")
     await cb.answer()
 
-@app.on_callback_query(filters.regex(r"^confirm_yes_(-\d+)_([A-Za-z0-9_]+)_(\w+)$"))
+@app.on_callback_query(filters.regex(r"^confirm_yes_(-\d+)_([A-Za-z0-9_]+)_(\w+)$") & cb_admin)
 async def cb_confirm_yes(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
     limit_str = cb.matches[0].group(2)
@@ -227,7 +241,7 @@ async def cb_confirm_yes(client, cb: CallbackQuery):
     invite_link = link_cache.get(chat_id) if mode == "link" else None
     asyncio.create_task(run_ban_process(client, msg, chat_id, target_limit, mode, invite_link=invite_link))
 
-@app.on_callback_query(filters.regex(r"^confirm_cancel$"))
+@app.on_callback_query(filters.regex(r"^confirm_cancel$") & cb_admin)
 async def cb_confirm_cancel(client, cb: CallbackQuery):
     await cb.message.edit_text("Action Cancelled.", reply_markup=None)
     await cb.answer("Cancelled")
@@ -379,7 +393,7 @@ async def run_ban_process(client, status_msg, chat_id, target_limit, mode="norma
 
 # ----------------- LOGIN AND TEXT HANDLERS ----------------- #
 
-@app.on_message(filters.command("login"))
+@app.on_message(filters.command("login") & admin_filter)
 async def login_command(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else None
     if not user_id: return
@@ -405,7 +419,7 @@ async def login_command(client: Client, message: Message):
     login_states[user_id] = {'step': 'AWAITING_PHONE', 'client': user_client}
     await client.send_message(message.chat.id, "Please send your phone number with country code\ne.g. +919876543210")
 
-@app.on_message(filters.command("cancel"))
+@app.on_message(filters.command("cancel") & admin_filter)
 async def cancel_login(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else None
     if not user_id: return
@@ -418,7 +432,7 @@ async def cancel_login(client: Client, message: Message):
     else:
         await client.send_message(message.chat.id, "No login process is currently running...")
 
-@app.on_message(filters.text & ~filters.command(["login", "cancel", "start", "update", "check", "stop"]))
+@app.on_message(filters.text & ~filters.command(["login", "cancel", "start", "update", "check", "stop"]) & admin_filter)
 async def handle_text_steps(client: Client, message: Message):
     text = message.text.strip()
     user_id = message.from_user.id if message.from_user else None
