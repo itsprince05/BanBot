@@ -73,10 +73,12 @@ async def start_command(client: Client, message: Message):
     else:
         name = "User"
         
-    chat_title = message.chat.title if message.chat.title else "Private Chat"
-    chat_id = message.chat.id
-    
-    await client.send_message(message.chat.id, f"Hi {name}\n\n{chat_title}\n`{chat_id}`")
+    if message.chat.type in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
+        chat_title = message.chat.title or "Unknown"
+        chat_id = message.chat.id
+        await client.send_message(message.chat.id, f"Hey {name}\n\n{chat_title}\n`{chat_id}`")
+    else:
+        await client.send_message(message.chat.id, f"Hey {name}")
 
 @app.on_message(filters.command("update"))
 async def update_command(client: Client, message: Message):
