@@ -246,9 +246,11 @@ async def cb_confirm_yes(client, cb: CallbackQuery):
     mode = cb.matches[0].group(3)
     target_limit = float('inf') if limit_str == "inf" else int(limit_str)
     
-    await cb.message.edit_reply_markup(reply_markup=None)
-    msg = await cb.message.reply_text(f"Starting Process...")
+    await cb.message.delete()
+    
+    msg = await client.send_message(cb.message.chat.id, f"Preparing Process...")
     invite_link = link_cache.get(chat_id) if mode == "link" else None
+    
     asyncio.create_task(run_ban_process(client, msg, chat_id, target_limit, mode, invite_link=invite_link))
 
 @app.on_callback_query(filters.regex(r"^confirm_cancel$") & cb_admin)
@@ -621,8 +623,9 @@ async def process_invite_link(client, message, link):
             InlineKeyboardButton("Ban All", callback_data=f"b_link_all_{chat.id}"),
             InlineKeyboardButton("Custom", callback_data=f"l_cust_{chat.id}")
         ]])
-        text = f"{chat.title or 'Unknown'}\n\n{joiner_count} members joined by given link"
-        await status_msg.edit_text(text, reply_markup=keyboard)
+        text = f"{chat.title or 'Unknown'}\n`{chat.id}`\n\n{joiner_count} members joined by given link"
+        await status_msg.delete()
+        await message.reply_text(text, reply_markup=keyboard)
         
     except Exception as e:
         await status_msg.edit_text(f"Error checking link: {e}")
