@@ -158,11 +158,10 @@ async def check_command(client: Client, message: Message):
                                 title = chat.title or "Unknown"
                                 
                                 text = f"{title}\n{member_count} members"
-                                keyboard = InlineKeyboardMarkup([
-                                    [InlineKeyboardButton("Ban All", callback_data=f"b_all_{chat.id}")],
-                                    [InlineKeyboardButton("Ban Deleted Accounts", callback_data=f"b_zombi_{chat.id}")],
-                                    [InlineKeyboardButton("Ban Custom Number", callback_data=f"b_cust_{chat.id}")]
-                                ])
+                                keyboard = InlineKeyboardMarkup([[
+                                    InlineKeyboardButton("Ban All", callback_data=f"b_all_{chat.id}"),
+                                    InlineKeyboardButton("Custom", callback_data=f"b_cust_{chat.id}")
+                                ]])
                                 await client.send_message(message.chat.id, text, reply_markup=keyboard)
                         except Exception:
                             pass
@@ -193,28 +192,28 @@ async def stop_command(client: Client, message: Message):
 @app.on_callback_query(filters.regex(r"^b_all_(-\d+)$") & cb_admin)
 async def cb_ban_all(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_normal")],
-        [InlineKeyboardButton("Cancel", callback_data="confirm_cancel")]
-    ])
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_normal"),
+        InlineKeyboardButton("Cancel", callback_data="confirm_cancel")
+    ]])
     await cb.message.edit_text(f"Are you sure you want to ban all members in `{chat_id}`?", reply_markup=keyboard)
     
 @app.on_callback_query(filters.regex(r"^b_zombi_(-\d+)$") & cb_admin)
 async def cb_ban_zombi(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_zombies")],
-        [InlineKeyboardButton("Cancel", callback_data="confirm_cancel")]
-    ])
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_zombies"),
+        InlineKeyboardButton("Cancel", callback_data="confirm_cancel")
+    ]])
     await cb.message.edit_text(f"Are you sure you want to ban all deleted zombie accounts in `{chat_id}`?", reply_markup=keyboard)
 
 @app.on_callback_query(filters.regex(r"^b_link_all_(-\d+)$") & cb_admin)
 async def cb_ban_link_all(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_link")],
-        [InlineKeyboardButton("Cancel", callback_data="confirm_cancel")]
-    ])
+    keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_link"),
+        InlineKeyboardButton("Cancel", callback_data="confirm_cancel")
+    ]])
     await cb.message.edit_text(f"Are you sure you want to ban all members joined by the given link?", reply_markup=keyboard)
 
 @app.on_callback_query(filters.regex(r"^[bl]_cust_(-\d+)$") & cb_admin)
@@ -245,6 +244,15 @@ async def cb_confirm_yes(client, cb: CallbackQuery):
 async def cb_confirm_cancel(client, cb: CallbackQuery):
     await cb.message.edit_text("Action Cancelled.", reply_markup=None)
     await cb.answer("Cancelled")
+
+@app.on_callback_query(filters.regex(r"^stop_process$") & cb_admin)
+async def cb_stop_process(client, cb: CallbackQuery):
+    global halt_ban
+    if halt_ban:
+        await cb.answer("Process already stopping...")
+    else:
+        halt_ban = True
+        await cb.answer("Stopping running process...")
 
 # ----------------- BAN ENGINE ----------------- #
 
@@ -347,8 +355,9 @@ async def run_ban_process(client, status_msg, chat_id, target_limit, mode="norma
                                  f"Banned {banned_count}\n"
                                  f"Remaining {rem_str}\n"
                                  f"Failed {fail_count}\n\n"
-                                 f"Click /stop to stop runnning process...")
-                    await status_msg.edit_text(prog_text)
+                                 f"Below or Click /stop to stop running process...")
+                    stop_kb = InlineKeyboardMarkup([[InlineKeyboardButton("Stop Process", callback_data="stop_process")]])
+                    await status_msg.edit_text(prog_text, reply_markup=stop_kb)
                     last_progress_t = current_t
                 except Exception:
                     pass
@@ -448,10 +457,10 @@ async def handle_text_steps(client: Client, message: Message):
             mode = user_states[user_id]["mode"]
             del user_states[user_id]
             
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_{limit}_{mode}")],
-                [InlineKeyboardButton("Cancel", callback_data="confirm_cancel")]
-            ])
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_{limit}_{mode}"),
+                InlineKeyboardButton("Cancel", callback_data="confirm_cancel")
+            ]])
             await client.send_message(message.chat.id, f"Are you sure you want to ban {limit} members?", reply_markup=keyboard)
         else:
             await client.send_message(message.chat.id, "Please enter a valid number.")
@@ -560,10 +569,10 @@ async def process_invite_link(client, message, link):
             
         link_cache[chat.id] = link
             
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("Ban All", callback_data=f"b_link_all_{chat.id}")],
-            [InlineKeyboardButton("Ban Custom Number", callback_data=f"l_cust_{chat.id}")]
-        ])
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Ban All", callback_data=f"b_link_all_{chat.id}"),
+            InlineKeyboardButton("Custom", callback_data=f"l_cust_{chat.id}")
+        ]])
         text = f"{chat.title or 'Unknown'}\n\n{joiner_count} members joined by given link"
         await status_msg.edit_text(text, reply_markup=keyboard)
         
