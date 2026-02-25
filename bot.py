@@ -26,7 +26,18 @@ GROUP_ID = -1001552827391
 login_states = {}
 user_states = {}
 link_cache = {}
+active_lists = {}
 halt_ban = False
+
+async def clear_other_list_messages(client: Client, chat_id: int, current_msg_id: int):
+    msg_ids = active_lists.get(chat_id, [])
+    to_delete = [mid for mid in msg_ids if mid != current_msg_id]
+    if to_delete:
+        try:
+            await client.delete_messages(chat_id, to_delete)
+        except Exception:
+            pass
+    active_lists[chat_id] = [current_msg_id]
 
 async def check_admin(_, client: Client, message: Message):
     if not message.chat or message.chat.type not in [ChatType.GROUP, ChatType.SUPERGROUP, ChatType.CHANNEL]:
@@ -139,6 +150,7 @@ async def update_command(client: Client, message: Message):
 async def check_command(client: Client, message: Message):
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
     status_msg = await client.send_message(message.chat.id, "Checking all groups and channels...\nThis may take a minute...")
+    active_lists[message.chat.id] = []
     found_any = False
     
     try:
@@ -168,7 +180,8 @@ async def check_command(client: Client, message: Message):
                                     InlineKeyboardButton("Ban All", callback_data=f"b_all_{chat.id}"),
                                     InlineKeyboardButton("Custom", callback_data=f"b_cust_{chat.id}")
                                 ]])
-                                await client.send_message(message.chat.id, text, reply_markup=keyboard)
+                                msg = await client.send_message(message.chat.id, text, reply_markup=keyboard)
+                                active_lists[message.chat.id].append(msg.id)
                         except Exception:
                             pass
                 except Exception:
@@ -198,7 +211,8 @@ async def stop_command(client: Client, message: Message):
 @app.on_callback_query(filters.regex(r"^b_all_(-\d+)$") & cb_admin)
 async def cb_ban_all(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
-    title = cb.message.text.split('\n')[0] if cb.message.text else str(chat_id)
+    title = cb.message.text.split('\n')[0] if cb.message.text else "Unknown"
+    await clear_other_list_messages(client, cb.message.chat.id, cb.message.id)
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_normal"),
         InlineKeyboardButton("Cancel", callback_data="confirm_cancel")
@@ -208,7 +222,8 @@ async def cb_ban_all(client, cb: CallbackQuery):
 @app.on_callback_query(filters.regex(r"^b_zombi_(-\d+)$") & cb_admin)
 async def cb_ban_zombi(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
-    title = cb.message.text.split('\n')[0] if cb.message.text else str(chat_id)
+    title = cb.message.text.split('\n')[0] if cb.message.text else "Unknown"
+    await clear_other_list_messages(client, cb.message.chat.id, cb.message.id)
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_zombies"),
         InlineKeyboardButton("Cancel", callback_data="confirm_cancel")
@@ -218,7 +233,8 @@ async def cb_ban_zombi(client, cb: CallbackQuery):
 @app.on_callback_query(filters.regex(r"^b_link_all_(-\d+)$") & cb_admin)
 async def cb_ban_link_all(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
-    title = cb.message.text.split('\n')[0] if cb.message.text else str(chat_id)
+    title = cb.message.text.split('\n')[0] if cb.message.text else "Unknown"
+    await clear_other_list_messages(client, cb.message.chat.id, cb.message.id)
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_link"),
         InlineKeyboardButton("Cancel", callback_data="confirm_cancel")
@@ -229,14 +245,15 @@ async def cb_ban_link_all(client, cb: CallbackQuery):
 async def cb_ban_cust(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
     mode = "link" if cb.data.startswith("l_") else "normal"
-    title = cb.message.text.split('\n')[0] if cb.message.text else str(chat_id)
+    title = cb.message.text.split('\n')[0] if cb.message.text else "Unknown"
+    await clear_other_list_messages(client, cb.message.chat.id, cb.message.id)
     user_states[cb.from_user.id] = {
         "action": "wait_cust_limit",
         "chat_id": chat_id,
         "mode": mode,
         "title": title
     }
-    await cb.message.edit_text(f"Please enter the number of members to ban in **{title}**:")
+    await cb.message.edit_text(f"Please enter the number of members to ban in **{title}**:", reply_markup=None)
     await cb.answer()
 
 @app.on_callback_query(filters.regex(r"^confirm_yes_(-\d+)_([A-Za-z0-9_]+)_(\w+)$") & cb_admin)
@@ -246,11 +263,9 @@ async def cb_confirm_yes(client, cb: CallbackQuery):
     mode = cb.matches[0].group(3)
     target_limit = float('inf') if limit_str == "inf" else int(limit_str)
     
-    await cb.message.delete()
-    
-    msg = await client.send_message(cb.message.chat.id, f"Preparing Process...")
+    await cb.message.edit_reply_markup(reply_markup=None)
+    msg = await cb.message.reply_text(f"Starting Process...")
     invite_link = link_cache.get(chat_id) if mode == "link" else None
-    
     asyncio.create_task(run_ban_process(client, msg, chat_id, target_limit, mode, invite_link=invite_link))
 
 @app.on_callback_query(filters.regex(r"^confirm_cancel$") & cb_admin)
@@ -361,17 +376,8 @@ async def run_ban_process(client, status_msg, chat_id, target_limit, mode="norma
             current_t = time.time()
             if current_t - last_progress_t >= 5.0 or total_processed == target_limit:
                 try:
-                    if target_limit == float('inf'):
-                        display_total = getattr(chat, 'members_count', 0)
-                        if display_total:
-                            total_str = str(display_total)
-                            rem_str = str(max(0, display_total - total_processed))
-                        else:
-                            total_str = "All"
-                            rem_str = "Calculating..."
-                    else:
-                        total_str = str(target_limit)
-                        rem_str = str(max(0, target_limit - total_processed))
+                    total_str = "All" if target_limit == float('inf') else str(target_limit)
+                    rem_str = "Calculating..." if target_limit == float('inf') else str(target_limit - total_processed)
                     prog_text = (f"Ban Process Running\n\n"
                                  f"Total {total_str}\n"
                                  f"Banned {banned_count}\n"
@@ -411,10 +417,7 @@ async def run_ban_process(client, status_msg, chat_id, target_limit, mode="norma
     else:
         final_text = "Ban Process Completed\n\n"
         
-    if target_limit == float('inf') and getattr(chat, 'members_count', 0):
-        total_final_str = str(getattr(chat, 'members_count', 0))
-    else:
-        total_final_str = "All" if target_limit == float('inf') else str(target_limit)
+    total_final_str = "All" if target_limit == float('inf') else str(target_limit)
     final_text += (f"Total {total_final_str}\n"
                    f"Banned {banned_count}\n"
                    f"Failed {fail_count}\n\n"
@@ -504,7 +507,7 @@ async def handle_text_steps(client: Client, message: Message):
             limit = int(text)
             chat_id = user_states[user_id]["chat_id"]
             mode = user_states[user_id]["mode"]
-            title = user_states[user_id].get("title", str(chat_id))
+            title = user_states[user_id].get("title", "Unknown")
             del user_states[user_id]
             
             keyboard = InlineKeyboardMarkup([[
@@ -623,9 +626,9 @@ async def process_invite_link(client, message, link):
             InlineKeyboardButton("Ban All", callback_data=f"b_link_all_{chat.id}"),
             InlineKeyboardButton("Custom", callback_data=f"l_cust_{chat.id}")
         ]])
-        text = f"{chat.title or 'Unknown'}\n`{chat.id}`\n\n{joiner_count} members joined by given link"
-        await status_msg.delete()
-        await message.reply_text(text, reply_markup=keyboard)
+        text = f"{chat.title or 'Unknown'}\n\n{joiner_count} members joined by given link"
+        msg = await status_msg.edit_text(text, reply_markup=keyboard)
+        active_lists[message.chat.id] = [msg.id]
         
     except Exception as e:
         await status_msg.edit_text(f"Error checking link: {e}")
