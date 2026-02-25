@@ -9,7 +9,7 @@ import time
 import http.client
 from pyrogram import Client, filters
 from pyrogram.enums import ChatMemberStatus, ChatType
-from pyrogram.types import Message
+from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from pyrogram.errors import SessionPasswordNeeded
 from pyrogram.raw import functions, types
 import config
@@ -21,9 +21,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger("Bot")
 
-GROUP_ID = -1003552827391
+GROUP_ID = -1001552827391
 
 login_states = {}
+user_states = {}
+link_cache = {}
 halt_ban = False
 
 class BotClient(Client):
@@ -41,7 +43,7 @@ class BotClient(Client):
                     await self.edit_message_text(chat_id, msg_id, "Updated\nRestarting...")
                 except Exception as e:
                     logger.error(f"Failed to edit startup message: {e}")
-                # Also send a new message indicating it has started up successfully
+                
                 await asyncio.sleep(2)
                 await self.send_message(GROUP_ID, "Bot is Live...")
             except Exception as outer_e:
@@ -52,11 +54,9 @@ class BotClient(Client):
                 except Exception:
                     pass
             finally:
-                # Remove from sys.argv so it doesn't leak into further reloads if not handled
                 idx = sys.argv.index("--updated")
                 del sys.argv[idx:idx+3]
 
-# Initialize the Bot client
 app = BotClient(
     "controller_bot",
     api_id=config.API_ID,
@@ -66,26 +66,17 @@ app = BotClient(
 
 @app.on_message(filters.command("start"))
 async def start_command(client: Client, message: Message):
-    """
-    Working /start command handler.
-    Replies: Hi {username}
-    """
     if message.from_user:
         name = message.from_user.username if message.from_user.username else message.from_user.first_name
     elif message.sender_chat:
         name = message.sender_chat.username if message.sender_chat.username else message.sender_chat.title
     else:
         name = "User"
-        
     await client.send_message(message.chat.id, f"Hi {name}")
 
 @app.on_message(filters.command("update") & filters.chat(GROUP_ID))
 async def update_command(client: Client, message: Message):
-    """
-    /update command for admins. Pulls latest changes from git and restarts.
-    """
     is_admin = False
-    
     if message.from_user:
         try:
             member = await client.get_chat_member(GROUP_ID, message.from_user.id)
@@ -94,7 +85,6 @@ async def update_command(client: Client, message: Message):
         except Exception as e:
             logger.error(f"Error checking admin status: {e}")
     elif message.sender_chat and message.sender_chat.id == GROUP_ID:
-        # User is anonymous admin
         is_admin = True
         
     if not is_admin:
@@ -111,9 +101,7 @@ async def update_command(client: Client, message: Message):
         await msg.edit_text(f"Error during update...")
         return
         
-    # Restart the bot
     args = [sys.executable] + sys.argv
-    # Clean up any existing --updated args to avoid duplicates
     if "--updated" in args:
         idx = args.index("--updated")
         del args[idx:idx+3]
@@ -123,14 +111,9 @@ async def update_command(client: Client, message: Message):
 
 @app.on_message(filters.command("check") & filters.chat(GROUP_ID))
 async def check_command(client: Client, message: Message):
-    """
-    /check command. Scans dialogs of the logged-in user session instance.
-    Lists groups/channels where user is admin AND @Ban_Karne_Wala_Bot is an admin with ban rights.
-    """
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
-    
     status_msg = await client.send_message(message.chat.id, "Checking all groups and channels...\nThis may take a minute...")
-    result_list = []
+    found_any = False
     
     try:
         await user_client.connect()
@@ -147,23 +130,23 @@ async def check_command(client: Client, message: Message):
                 try:
                     user_member = await user_client.get_chat_member(chat.id, me.id)
                     if user_member.status in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-                        # Now check if bot is admin and has ban rights
                         try:
                             bot_member = await user_client.get_chat_member(chat.id, "Ban_Karne_Wala_Bot")
-                            if bot_member.status == ChatMemberStatus.ADMINISTRATOR:
-                                if bot_member.privileges and bot_member.privileges.can_restrict_members:
-                                    # Output format: `/<id>` <count> <name>
-                                    # If members_count is not readily available, default to 0
-                                    member_count = chat.members_count or 0
-                                    title = chat.title or "Unknown"
-                                    # Removing minus sign for cleaner pure ID copy/paste format
-                                    raw_id = str(chat.id).replace("-", "")
-                                    result_list.append(f"`{raw_id}`\n{member_count} members\n{title}")
+                            if bot_member.status == ChatMemberStatus.ADMINISTRATOR and bot_member.privileges and bot_member.privileges.can_restrict_members:
+                                found_any = True
+                                member_count = chat.members_count or 0
+                                title = chat.title or "Unknown"
+                                
+                                text = f"{title}\n{member_count} members"
+                                keyboard = InlineKeyboardMarkup([
+                                    [InlineKeyboardButton("Ban All", callback_data=f"b_all_{chat.id}")],
+                                    [InlineKeyboardButton("Ban Deleted Accounts", callback_data=f"b_zombi_{chat.id}")],
+                                    [InlineKeyboardButton("Ban Custom Number", callback_data=f"b_cust_{chat.id}")]
+                                ])
+                                await client.send_message(message.chat.id, text, reply_markup=keyboard)
                         except Exception:
-                            # Bot might not be in the group, or missing privileges info, skip it
                             pass
                 except Exception:
-                    # User is not admin or missing info, skip
                     pass
     except Exception as e:
         await status_msg.edit_text(f"Error: {e}")
@@ -174,35 +157,88 @@ async def check_command(client: Client, message: Message):
     if user_client.is_connected:
         await user_client.disconnect()
         
-    if result_list:
-        text = "\n\n".join(result_list)
-        if len(text) > 4000:
-            for i in range(0, len(text), 4000):
-                await client.send_message(message.chat.id, text[i:i+4000])
-            await status_msg.delete()
-        else:
-            await status_msg.edit_text(text)
-    else:
+    if not found_any:
         await status_msg.edit_text("No groups or channels found where both you and Bot are admins with ban permissions...")
+    else:
+        await status_msg.delete()
 
-@app.on_message(filters.regex(r"^/(-\d+)(?:\s+(\d+))?$") & filters.chat(GROUP_ID))
-async def fetch_members_command(client: Client, message: Message):
-    """
-    Fetches 'n' amount of UIDs from a given /<id> group or channel using the user session.
-    """
-    match = message.matches[0]
-    chat_id = int(match.group(1))
-        
-    limit = int(match.group(2)) if match.group(2) else 100
+@app.on_message(filters.command("stop") & filters.chat(GROUP_ID))
+async def stop_command(client: Client, message: Message):
+    global halt_ban
+    halt_ban = True
+    await client.send_message(message.chat.id, "Ban Process Stopped")
+
+# ----------------- CALLBACK QUERIES ----------------- #
+
+@app.on_callback_query(filters.regex(r"^b_all_(-\d+)$"))
+async def cb_ban_all(client, cb: CallbackQuery):
+    chat_id = int(cb.matches[0].group(1))
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_normal")],
+        [InlineKeyboardButton("Cancel", callback_data="confirm_cancel")]
+    ])
+    await cb.message.edit_text(f"Are you sure you want to ban all members in `{chat_id}`?", reply_markup=keyboard)
+    
+@app.on_callback_query(filters.regex(r"^b_zombi_(-\d+)$"))
+async def cb_ban_zombi(client, cb: CallbackQuery):
+    chat_id = int(cb.matches[0].group(1))
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_zombies")],
+        [InlineKeyboardButton("Cancel", callback_data="confirm_cancel")]
+    ])
+    await cb.message.edit_text(f"Are you sure you want to ban all deleted zombie accounts in `{chat_id}`?", reply_markup=keyboard)
+
+@app.on_callback_query(filters.regex(r"^b_link_all_(-\d+)$"))
+async def cb_ban_link_all(client, cb: CallbackQuery):
+    chat_id = int(cb.matches[0].group(1))
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_link")],
+        [InlineKeyboardButton("Cancel", callback_data="confirm_cancel")]
+    ])
+    await cb.message.edit_text(f"Are you sure you want to ban all members joined by the given link?", reply_markup=keyboard)
+
+@app.on_callback_query(filters.regex(r"^[bl]_cust_(-\d+)$"))
+async def cb_ban_cust(client, cb: CallbackQuery):
+    chat_id = int(cb.matches[0].group(1))
+    mode = "link" if cb.data.startswith("l_") else "normal"
+    user_states[cb.from_user.id] = {
+        "action": "wait_cust_limit",
+        "chat_id": chat_id,
+        "mode": mode
+    }
+    await cb.message.reply_text(f"Please enter the number of members to ban in `{chat_id}`:")
+    await cb.answer()
+
+@app.on_callback_query(filters.regex(r"^confirm_yes_(-\d+)_([A-Za-z0-9_]+)_(\w+)$"))
+async def cb_confirm_yes(client, cb: CallbackQuery):
+    chat_id = int(cb.matches[0].group(1))
+    limit_str = cb.matches[0].group(2)
+    mode = cb.matches[0].group(3)
+    target_limit = float('inf') if limit_str == "inf" else int(limit_str)
+    
+    await cb.message.edit_reply_markup(reply_markup=None)
+    msg = await cb.message.reply_text(f"Starting Process...")
+    invite_link = link_cache.get(chat_id) if mode == "link" else None
+    asyncio.create_task(run_ban_process(client, msg, chat_id, target_limit, mode, invite_link=invite_link))
+
+@app.on_callback_query(filters.regex(r"^confirm_cancel$"))
+async def cb_confirm_cancel(client, cb: CallbackQuery):
+    await cb.message.edit_text("Action Cancelled.", reply_markup=None)
+    await cb.answer("Cancelled")
+
+# ----------------- BAN ENGINE ----------------- #
+
+async def run_ban_process(client, status_msg, chat_id, target_limit, mode="normal", invite_link=None):
+    global halt_ban
+    halt_ban = False
     
     user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
-    status_msg = await client.send_message(message.chat.id, f"Fetching up to {limit} members from {chat_id}...")
-    
     try:
         await user_client.connect()
         me = await user_client.get_me()
         if not me:
-            raise Exception("Session expired or not logged in.")
+            await status_msg.edit_text("Session expired. Please /login")
+            return
             
         try:
             chat = await user_client.get_chat(chat_id)
@@ -212,73 +248,13 @@ async def fetch_members_command(client: Client, message: Message):
                 pass
             chat = await user_client.get_chat(chat_id)
             
-        await status_msg.edit_text(f"Fetching members from {chat.title or chat_id}...")
-        
-        uids = []
-        async for member in user_client.get_chat_members(chat_id, limit=limit):
-            user = member.user
-            if user and member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-                uids.append(str(user.id))
-                
-        if uids:
-            text = "\n".join(uids)
-            with open("members.txt", "w") as f:
-                f.write(text)
-            await client.send_document(message.chat.id, document="members.txt", caption=f"Fetched {len(uids)} UIDs from `{chat_id}`")
-            os.remove("members.txt")
-            await status_msg.delete()
-        else:
-            await status_msg.edit_text("No members found or couldn't fetch...")
-            
+        await status_msg.edit_text("Starting real-time ban loops...")
     except Exception as e:
-        await status_msg.edit_text(f"Error: {e}")
-        
-    finally:
+        await status_msg.edit_text(f"Error initialization: {e}")
         if user_client.is_connected:
             await user_client.disconnect()
-
-@app.on_message(filters.command("stop") & filters.chat(GROUP_ID))
-async def stop_command(client: Client, message: Message):
-    global halt_ban
-    halt_ban = True
-    await client.send_message(message.chat.id, "Ban Process Stopped...")
-
-@app.on_message(filters.command("ban") & filters.chat(GROUP_ID))
-async def ban_command(client: Client, message: Message):
-    """
-    /ban <group/channel id> <n>
-    Fetches the member list using the user session, then the bot bans them individually
-    with timing constraints (2 users/sec, 5s delay after every 20 users).
-    """
-    args = message.text.split()
-    if len(args) < 3:
-        await client.send_message(message.chat.id, "Usage: /ban <group_id> <limit or all>")
         return
-        
-    raw_id_str = args[1]
-    limit_str = args[2].lower()
-    
-    if limit_str == "all":
-        target_limit = float('inf')
-    else:
-        try:
-            target_limit = int(limit_str)
-        except Exception:
-            await client.send_message(message.chat.id, "Limit must be a number or 'all'.")
-            return
-            
-    # Restore the Telegram group negative prefix if User provided clean ID
-    if not raw_id_str.startswith("-"):
-        chat_id = int("-" + raw_id_str)
-    else:
-        chat_id = int(raw_id_str)
-        
-    user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
-    status_msg = await client.send_message(message.chat.id, f"Initializing ban process for {chat_id}...")
-    
-    global halt_ban
-    halt_ban = False
-    
+
     conn = http.client.HTTPSConnection("api.telegram.org")
     api_headers = {"Content-Type": "application/json", "Connection": "keep-alive"}
     
@@ -287,15 +263,13 @@ async def ban_command(client: Client, message: Message):
         def do_request():
             try:
                 conn.request("POST", f"/bot{config.BOT_TOKEN}/banChatMember", body=data, headers=api_headers)
-                response = conn.getresponse()
-                return json.loads(response.read().decode())
+                return json.loads(conn.getresponse().read().decode())
             except Exception:
                 try:
                     conn.close()
                     conn.connect()
                     conn.request("POST", f"/bot{config.BOT_TOKEN}/banChatMember", body=data, headers=api_headers)
-                    response = conn.getresponse()
-                    return json.loads(response.read().decode())
+                    return json.loads(conn.getresponse().read().decode())
                 except Exception as e2:
                     return {"ok": False, "description": str(e2)}
         return await asyncio.to_thread(do_request)
@@ -303,45 +277,39 @@ async def ban_command(client: Client, message: Message):
     banned_count = 0
     fail_count = 0
     total_processed = 0
-    
     seen_uids = set()
     global_start_t = None
     last_progress_t = time.time()
     
     try:
-        await user_client.connect()
-        me = await user_client.get_me()
-        if not me:
-            raise Exception("Session expired or not logged in.")
-            
-        try:
-            chat = await user_client.get_chat(chat_id)
-        except Exception:
-            await status_msg.edit_text("Caching peer info...")
-            async for _ in user_client.get_dialogs(limit=200):
-                pass
-            chat = await user_client.get_chat(chat_id)
-            
-        await status_msg.edit_text(f"Starting chunked ban loops for {chat.title or chat_id}...")
-        
         while total_processed < target_limit and not halt_ban:
             fetch_amount = min(100, target_limit - total_processed) if target_limit != float('inf') else 100
-            
             uids = []
+            
             try:
-                # Always fetch and filter exactly 'fetch_amount' fresh non-admin users
-                async for member in user_client.get_chat_members(chat_id):
-                    if member.user and member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
-                        if member.user.id not in seen_uids:
-                            uids.append(member.user.id)
-                            seen_uids.add(member.user.id)
+                if mode == "link":
+                    async for joiner in user_client.get_chat_invite_link_joiners(chat_id, invite_link=invite_link):
+                        if joiner.user and joiner.user.id not in seen_uids:
+                            uids.append(joiner.user.id)
+                            seen_uids.add(joiner.user.id)
                             if len(uids) >= fetch_amount:
                                 break
+                else:
+                    async for member in user_client.get_chat_members(chat_id):
+                        if member.user and member.user.id not in seen_uids:
+                            is_zombie = member.user.is_deleted
+                            valid_admin_status = member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]
+                            if valid_admin_status:
+                                if mode == "zombies" and not is_zombie:
+                                    continue
+                                uids.append(member.user.id)
+                                seen_uids.add(member.user.id)
+                                if len(uids) >= fetch_amount:
+                                    break
             except Exception as e:
-                logger.error(f"Error fetching chunk: {e}")
+                logger.error(f"Error chunk: {e}")
                 
             if not uids:
-                # No more unbanned regular members exist / list completely exhausted
                 break
                 
             for uid in uids:
@@ -364,7 +332,6 @@ async def ban_command(client: Client, message: Message):
                 total_processed += 1
                 elapsed = time.time() - start_t
                 
-                # Update progress every exact 5 seconds (Time based instead of loop based)
                 current_t = time.time()
                 if current_t - last_progress_t >= 5.0 or total_processed == target_limit:
                     try:
@@ -381,7 +348,6 @@ async def ban_command(client: Client, message: Message):
                     except Exception:
                         pass
                         
-                # Preserve 2 bans per second strict rate limit, without dropping to any 5 second break bounds
                 if not halt_ban:
                     await asyncio.sleep(max(0, 0.5 - elapsed))
                     
@@ -420,15 +386,12 @@ async def ban_command(client: Client, message: Message):
     except Exception:
         pass
 
+# ----------------- LOGIN AND TEXT HANDLERS ----------------- #
+
 @app.on_message(filters.command("login") & filters.chat(GROUP_ID))
 async def login_command(client: Client, message: Message):
-    """
-    /login command to create and save a Pyrogram user session inside the group.
-    """
     user_id = message.from_user.id if message.from_user else None
-    if not user_id:
-        return
-        
+    if not user_id: return
     if user_id in login_states:
         await client.send_message(message.chat.id, "Login process is already running... \nSend /cancel to stop it...")
         return
@@ -446,21 +409,15 @@ async def login_command(client: Client, message: Message):
             await user_client.disconnect()
             return
     except Exception:
-        # Not logged in or session expired
         pass
         
-    login_states[user_id] = {
-        'step': 'AWAITING_PHONE',
-        'client': user_client
-    }
+    login_states[user_id] = {'step': 'AWAITING_PHONE', 'client': user_client}
     await client.send_message(message.chat.id, "Please send your phone number with country code\ne.g. +919876543210")
 
 @app.on_message(filters.command("cancel") & filters.chat(GROUP_ID))
 async def cancel_login(client: Client, message: Message):
     user_id = message.from_user.id if message.from_user else None
-    if not user_id:
-        return
-        
+    if not user_id: return
     if user_id in login_states:
         user_client = login_states[user_id]['client']
         if user_client.is_connected:
@@ -470,19 +427,41 @@ async def cancel_login(client: Client, message: Message):
     else:
         await client.send_message(message.chat.id, "No login process is currently running...")
 
-@app.on_message(filters.chat(GROUP_ID) & filters.text & ~filters.command(["login", "cancel", "start", "update"]))
-async def handle_login_steps(client: Client, message: Message):
+@app.on_message(filters.chat(GROUP_ID) & filters.text & ~filters.command(["login", "cancel", "start", "update", "check", "stop"]))
+async def handle_text_steps(client: Client, message: Message):
+    text = message.text.strip()
     user_id = message.from_user.id if message.from_user else None
+    
+    if "t.me/" in text or "telegram.me/" in text:
+        asyncio.create_task(process_invite_link(client, message, text))
+        return
+        
+    if user_id in user_states and user_states[user_id].get("action") == "wait_cust_limit":
+        if text.isdigit():
+            limit = int(text)
+            chat_id = user_states[user_id]["chat_id"]
+            mode = user_states[user_id]["mode"]
+            del user_states[user_id]
+            
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_{limit}_{mode}")],
+                [InlineKeyboardButton("Cancel", callback_data="confirm_cancel")]
+            ])
+            await client.send_message(message.chat.id, f"Are you sure you want to ban {limit} members?", reply_markup=keyboard)
+        else:
+            await client.send_message(message.chat.id, "Please enter a valid number.")
+        return
+
+    # Handle Login Steps
     if not user_id or user_id not in login_states:
         return
         
     state = login_states[user_id]
     step = state['step']
     user_client = state['client']
-    text = message.text
     
     if step == 'AWAITING_PHONE':
-        phone = text.strip()
+        phone = text
         state['phone'] = phone
         try:
             sent_code = await user_client.send_code(phone)
@@ -499,7 +478,6 @@ async def handle_login_steps(client: Client, message: Message):
         code = text.replace(" ", "")
         phone = state['phone']
         phone_code_hash = state['phone_code_hash']
-        
         try:
             await user_client.sign_in(phone, phone_code_hash, code)
             await client.send_message(message.chat.id, "Login successful...")
@@ -516,7 +494,7 @@ async def handle_login_steps(client: Client, message: Message):
             del login_states[user_id]
             
     elif step == 'AWAITING_PASSWORD':
-        password = text.strip()
+        password = text
         try:
             await user_client.check_password(password)
             await client.send_message(message.chat.id, "Login successful...")
@@ -528,6 +506,67 @@ async def handle_login_steps(client: Client, message: Message):
             if user_client.is_connected:
                 await user_client.disconnect()
             del login_states[user_id]
+
+async def process_invite_link(client, message, link):
+    status_msg = await client.send_message(message.chat.id, "Checking...")
+    user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
+    
+    try:
+        await user_client.connect()
+        me = await user_client.get_me()
+        if not me:
+            await status_msg.edit_text("Session expired. Please /login first.")
+            return
+            
+        try:
+            chat = await user_client.get_chat(link)
+        except Exception as e:
+            await status_msg.edit_text(f"Invalid or expired link: {e}")
+            return
+            
+        try:
+            user_member = await user_client.get_chat_member(chat.id, me.id)
+            if user_member.status not in [ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER]:
+                await status_msg.edit_text("Error: You are not an admin in this chat.")
+                return
+                
+            bot_member = await user_client.get_chat_member(chat.id, "Ban_Karne_Wala_Bot")
+            if bot_member.status != ChatMemberStatus.ADMINISTRATOR or not bot_member.privileges or not bot_member.privileges.can_restrict_members:
+                await status_msg.edit_text("Error: Bot is not an admin with ban permissions in this chat.")
+                return
+        except Exception:
+            await status_msg.edit_text("Error: Missing ban permissions for you or the bot in this chat.")
+            return
+            
+        joiner_count = 0
+        try:
+            from pyrogram.raw.functions.messages import GetChatInviteImporters
+            from pyrogram.raw import types
+            res = await user_client.invoke(GetChatInviteImporters(
+                peer=await user_client.resolve_peer(chat.id),
+                link=link,
+                limit=1,
+                offset_date=0,
+                offset_user=types.InputUserEmpty()
+            ))
+            joiner_count = getattr(res, "count", 0)
+        except Exception:
+            joiner_count = "unknown"
+            
+        link_cache[chat.id] = link
+            
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Ban All", callback_data=f"b_link_all_{chat.id}")],
+            [InlineKeyboardButton("Ban Custom Number", callback_data=f"l_cust_{chat.id}")]
+        ])
+        text = f"{chat.title or 'Unknown'}\n\n{joiner_count} members joined by given link"
+        await status_msg.edit_text(text, reply_markup=keyboard)
+        
+    except Exception as e:
+        await status_msg.edit_text(f"Error checking link: {e}")
+    finally:
+        if user_client.is_connected:
+            await user_client.disconnect()
 
 if __name__ == "__main__":
     app.run()
