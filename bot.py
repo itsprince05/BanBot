@@ -62,6 +62,12 @@ class BotClient(Client):
         await super().start()
         logger.info("Bot started successfully.")
         
+        try:
+            from pyrogram.types import BotCommand
+            await self.set_bot_commands([])
+        except Exception:
+            pass
+        
         # Check command structure for restart tokens
         if "--updated" in sys.argv:
             try:
@@ -441,7 +447,31 @@ async def cancel_login(client: Client, message: Message):
     else:
         await client.send_message(message.chat.id, "No login process is currently running...")
 
-@app.on_message(filters.text & ~filters.command(["login", "cancel", "start", "update", "check", "stop"]) & admin_filter)
+@app.on_message(filters.command("logout") & admin_filter)
+async def logout_command(client: Client, message: Message):
+    status_msg = await client.send_message(message.chat.id, "Attempting logout...")
+    user_client = Client("user_session", api_id=config.API_ID, api_hash=config.API_HASH, in_memory=False)
+    try:
+        await user_client.connect()
+        me = await user_client.get_me()
+        if me:
+            await user_client.log_out()
+            await status_msg.edit_text("Logged out successfully from current session.")
+        else:
+            await status_msg.edit_text("No active session found to logout.")
+    except Exception as e:
+        await status_msg.edit_text(f"Session already inactive or error: {e}")
+    finally:
+        if user_client.is_connected:
+            await user_client.disconnect()
+            
+    try:
+        if os.path.exists("user_session.session"):
+            os.remove("user_session.session")
+    except Exception:
+        pass
+
+@app.on_message(filters.text & ~filters.command(["login", "cancel", "logout", "start", "update", "check", "stop"]) & admin_filter)
 async def handle_text_steps(client: Client, message: Message):
     text = message.text.strip()
     user_id = message.from_user.id if message.from_user else None
