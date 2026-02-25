@@ -198,40 +198,45 @@ async def stop_command(client: Client, message: Message):
 @app.on_callback_query(filters.regex(r"^b_all_(-\d+)$") & cb_admin)
 async def cb_ban_all(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
+    title = cb.message.text.split('\n')[0] if cb.message.text else str(chat_id)
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_normal"),
         InlineKeyboardButton("Cancel", callback_data="confirm_cancel")
     ]])
-    await cb.message.edit_text(f"Are you sure you want to ban all members in `{chat_id}`?", reply_markup=keyboard)
+    await cb.message.edit_text(f"Are you sure you want to ban all members in **{title}**?", reply_markup=keyboard)
     
 @app.on_callback_query(filters.regex(r"^b_zombi_(-\d+)$") & cb_admin)
 async def cb_ban_zombi(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
+    title = cb.message.text.split('\n')[0] if cb.message.text else str(chat_id)
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_zombies"),
         InlineKeyboardButton("Cancel", callback_data="confirm_cancel")
     ]])
-    await cb.message.edit_text(f"Are you sure you want to ban all deleted zombie accounts in `{chat_id}`?", reply_markup=keyboard)
+    await cb.message.edit_text(f"Are you sure you want to ban all deleted zombie accounts in **{title}**?", reply_markup=keyboard)
 
 @app.on_callback_query(filters.regex(r"^b_link_all_(-\d+)$") & cb_admin)
 async def cb_ban_link_all(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
+    title = cb.message.text.split('\n')[0] if cb.message.text else str(chat_id)
     keyboard = InlineKeyboardMarkup([[
         InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_inf_link"),
         InlineKeyboardButton("Cancel", callback_data="confirm_cancel")
     ]])
-    await cb.message.edit_text(f"Are you sure you want to ban all members joined by the given link?", reply_markup=keyboard)
+    await cb.message.edit_text(f"Are you sure you want to ban all members joined by the given link in **{title}**?", reply_markup=keyboard)
 
 @app.on_callback_query(filters.regex(r"^[bl]_cust_(-\d+)$") & cb_admin)
 async def cb_ban_cust(client, cb: CallbackQuery):
     chat_id = int(cb.matches[0].group(1))
     mode = "link" if cb.data.startswith("l_") else "normal"
+    title = cb.message.text.split('\n')[0] if cb.message.text else str(chat_id)
     user_states[cb.from_user.id] = {
         "action": "wait_cust_limit",
         "chat_id": chat_id,
-        "mode": mode
+        "mode": mode,
+        "title": title
     }
-    await cb.message.reply_text(f"Please enter the number of members to ban in `{chat_id}`:")
+    await cb.message.edit_text(f"Please enter the number of members to ban in **{title}**:")
     await cb.answer()
 
 @app.on_callback_query(filters.regex(r"^confirm_yes_(-\d+)_([A-Za-z0-9_]+)_(\w+)$") & cb_admin)
@@ -354,8 +359,17 @@ async def run_ban_process(client, status_msg, chat_id, target_limit, mode="norma
             current_t = time.time()
             if current_t - last_progress_t >= 5.0 or total_processed == target_limit:
                 try:
-                    total_str = "All" if target_limit == float('inf') else str(target_limit)
-                    rem_str = "Calculating..." if target_limit == float('inf') else str(target_limit - total_processed)
+                    if target_limit == float('inf'):
+                        display_total = getattr(chat, 'members_count', 0)
+                        if display_total:
+                            total_str = str(display_total)
+                            rem_str = str(max(0, display_total - total_processed))
+                        else:
+                            total_str = "All"
+                            rem_str = "Calculating..."
+                    else:
+                        total_str = str(target_limit)
+                        rem_str = str(max(0, target_limit - total_processed))
                     prog_text = (f"Ban Process Running\n\n"
                                  f"Total {total_str}\n"
                                  f"Banned {banned_count}\n"
@@ -395,7 +409,10 @@ async def run_ban_process(client, status_msg, chat_id, target_limit, mode="norma
     else:
         final_text = "Ban Process Completed\n\n"
         
-    total_final_str = "All" if target_limit == float('inf') else str(target_limit)
+    if target_limit == float('inf') and getattr(chat, 'members_count', 0):
+        total_final_str = str(getattr(chat, 'members_count', 0))
+    else:
+        total_final_str = "All" if target_limit == float('inf') else str(target_limit)
     final_text += (f"Total {total_final_str}\n"
                    f"Banned {banned_count}\n"
                    f"Failed {fail_count}\n\n"
@@ -485,13 +502,14 @@ async def handle_text_steps(client: Client, message: Message):
             limit = int(text)
             chat_id = user_states[user_id]["chat_id"]
             mode = user_states[user_id]["mode"]
+            title = user_states[user_id].get("title", str(chat_id))
             del user_states[user_id]
             
             keyboard = InlineKeyboardMarkup([[
                 InlineKeyboardButton("Yes", callback_data=f"confirm_yes_{chat_id}_{limit}_{mode}"),
                 InlineKeyboardButton("Cancel", callback_data="confirm_cancel")
             ]])
-            await client.send_message(message.chat.id, f"Are you sure you want to ban {limit} members?", reply_markup=keyboard)
+            await client.send_message(message.chat.id, f"Are you sure you want to ban {limit} members in **{title}**?", reply_markup=keyboard)
         else:
             await client.send_message(message.chat.id, "Please enter a valid number.")
         return
